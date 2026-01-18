@@ -20,3 +20,5 @@ At this point I had developed a few goals.
 4. Interaction with user data through a database or api. Maybe a calendar table in mysql, integrating with google calendar api would be cool if its not to hard
 
 Because of my unfamiliarity with python and AI i am going to lean into the vibe coding a bit more than i usually would.
+
+### 
