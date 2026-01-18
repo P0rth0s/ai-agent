@@ -11,3 +11,4 @@ requests>=2.31.0
 lxml>=4.9.0
 psycopg2-binary>=2.9.0
 googlemaps
+weaviate-client>=4.5.0

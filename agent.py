@@ -23,6 +23,26 @@ from langgraph.checkpoint.memory import MemorySaver
 # Load environment variables
 load_dotenv()
 
+import weaviate
+from weaviate.classes.init import Auth
+
+# Weaviate client (for long-term memory)
+_weaviate_client = None
+
+def get_weaviate_client():
+    """Get or create Weaviate client for vector storage"""
+    global _weaviate_client
+    if _weaviate_client is None:
+        try:
+            _weaviate_client = weaviate.connect_to_local(
+                host=os.getenv("WEAVIATE_HOST", "localhost"),
+                port=int(os.getenv("WEAVIATE_PORT", "8080"))
+            )
+            logger.info("✅ Connected to Weaviate")
+        except Exception as e:
+            logger.error(f"❌ Failed to connect to Weaviate: {e}")
+    return _weaviate_client
+
 # Database connection helper
 def get_db_connection():
     """Create and return a database connection"""
@@ -33,6 +53,35 @@ def get_db_connection():
         user=os.getenv("DB_USER", "postgres"),
         password=os.getenv("DB_PASSWORD", "postgres")
     )
+
+# Helper function for checking appointment overlaps
+def check_appointment_overlap(cur, start_dt: datetime, end_dt: datetime, exclude_id: Optional[int] = None) -> Optional[dict]:
+    """Check if an appointment overlaps with existing appointments.
+    
+    Args:
+        cur: Database cursor
+        start_dt: Start datetime of appointment
+        end_dt: End datetime of appointment
+        exclude_id: Optional appointment ID to exclude from overlap check (for updates)
+    
+    Returns:
+        Dictionary with overlapping appointment details if overlap exists, None otherwise
+    """
+    if exclude_id:
+        cur.execute("""
+            SELECT id, appointment_title, start_time, estimated_end_time
+            FROM appointments
+            WHERE (start_time, estimated_end_time) OVERLAPS (%s::timestamp, %s::timestamp)
+            AND id != %s
+        """, (start_dt, end_dt, exclude_id))
+    else:
+        cur.execute("""
+            SELECT id, appointment_title, start_time, estimated_end_time
+            FROM appointments
+            WHERE (start_time, estimated_end_time) OVERLAPS (%s::timestamp, %s::timestamp)
+        """, (start_dt, end_dt))
+    
+    return cur.fetchone()
 
 # Calendar Tools
 @tool
@@ -63,13 +112,7 @@ def add_task(title: str, date: str, start_time: str, description: str, customer_
         cur = conn.cursor(cursor_factory=RealDictCursor)
         
         # Check for overlapping appointments
-        cur.execute("""
-            SELECT id, appointment_title, start_time, estimated_end_time
-            FROM appointments
-            WHERE (start_time, estimated_end_time) OVERLAPS (%s::timestamp, %s::timestamp)
-        """, (start_dt, end_dt))
-        
-        overlapping = cur.fetchone()
+        overlapping = check_appointment_overlap(cur, start_dt, end_dt)
         if overlapping:
             cur.close()
             conn.close()
@@ -202,12 +245,21 @@ def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] =
             current_date = appointment['start_time'].strftime('%Y-%m-%d') if not date else date
             current_time = appointment['start_time'].strftime('%H:%M') if not time else time
             new_start = datetime.strptime(f"{current_date} {current_time}", "%Y-%m-%d %H:%M")
-            updates.append("start_time = %s")
-            params.append(new_start)
             # Keep same duration
             duration = appointment['estimated_end_time'] - appointment['start_time']
+            new_end = new_start + duration
+            
+            # Check for overlapping appointments (excluding current appointment)
+            overlapping = check_appointment_overlap(cur, new_start, new_end, exclude_id=task_id)
+            if overlapping:
+                cur.close()
+                conn.close()
+                return f"Error: This time change would overlap with existing appointment '{overlapping['appointment_title']}' (ID: {overlapping['id']}) scheduled from {overlapping['start_time'].strftime('%H:%M')} to {overlapping['estimated_end_time'].strftime('%H:%M')}. Please choose a different time."
+            
+            updates.append("start_time = %s")
+            params.append(new_start)
             updates.append("estimated_end_time = %s")
-            params.append(new_start + duration)
+            params.append(new_end)
         
         if not updates:
             cur.close()
@@ -354,20 +406,23 @@ def create_calendar_agent():
     Always confirm actions and provide clear feedback. Remember previous messages in our conversation.
 
     Today's date is {datetime.now().strftime('%Y-%m-%d')} ({datetime.now().strftime('%A, %B %d, %Y')}).
-    If users specify a date without a year, assume they mean this year.
-    Do not allow scheduling tasks in the past.
-    Do not allow scheduling overlapping tasks.
-
-    CRITICAL: Before adding or updating any appointment, you MUST:
-    1. Use get_previous_task to find the appointment ending before the new appointment
-    2. If there is a previous appointment, use check_travel_time to calculate drive time from previous address to new address
-    3. Verify there is at least (travel time + 15 minutes) gap between previous appointment end and new appointment start
-    4. Use get_next_task to find the appointment starting after the new appointment
-    5. If there is a next appointment, use check_travel_time to calculate drive time from new address to next address
-    6. Verify there is at least (travel time + 15 minutes) gap between new appointment end and next appointment start
-    7. Only if both checks pass (or no adjacent appointments exist), proceed with add_task or update_task
     
-    If travel time checks fail, inform the user and suggest alternative times.
+    IMPORTANT DATE HANDLING:
+    - When users say "today", use: {datetime.now().strftime('%Y-%m-%d')}
+    - When users say "tomorrow" or "tmrw", use: {(datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')}
+    - When users say "next week", add 7 days to today: {(datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')}
+    - When users specify just a day name (e.g., "Monday"), find the next occurrence of that day
+    - When users specify a date without a year, assume {datetime.now().year}
+    
+    IMPORTANT ADDRESS HANDLING:
+    - Always confirm full addresses when scheduling tasks that require travel.
+    - An Address must contain a house number, street, city, zipcode, and state.
+
+    IMPORTANT SCHEDULING RULES:
+    - Do not allow scheduling tasks in the past.
+    - Do not allow scheduling overlapping tasks.
+    - There must be anough travel time between the previous appointment and the new appointment, as well as between the new appointment and the next appointment.
+    - If we fail any of these rules suggest alternative times based on existing calendar entries and their travel times.
     """
 
     # Create agent with memory checkpointer
@@ -383,6 +438,5 @@ def create_calendar_agent():
     return agent
 
     ### Travel time not working
-    ### Asking for full date still, check address validation and parsing
     ### We probably want to agents actually one for the owner and one for the customer
     ### Still want to add long term memory
