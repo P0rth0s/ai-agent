@@ -232,6 +232,90 @@ def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] =
 import googlemaps
 
 @tool
+def get_previous_task(reference_time: str) -> str:
+    """Get the appointment scheduled immediately before a given time.
+    
+    Args:
+        reference_time: Time in YYYY-MM-DD HH:MM format
+    """
+    logger.info(f"🔧 TOOL CALLED: get_previous_task(reference_time='{reference_time}')")
+    try:
+        ref_dt = datetime.strptime(reference_time, "%Y-%m-%d %H:%M")
+        
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        cur.execute("""
+            SELECT id, customer_name, appointment_title, notes, start_time, estimated_end_time, address
+            FROM appointments
+            WHERE estimated_end_time <= %s
+            ORDER BY estimated_end_time DESC
+            LIMIT 1
+        """, (ref_dt,))
+        
+        appointment = cur.fetchone()
+        cur.close()
+        conn.close()
+        
+        if not appointment:
+            return "No previous appointment found."
+        
+        result = f"Previous Appointment:\n"
+        result += f"[{appointment['id']}] {appointment['appointment_title']} - {appointment['customer_name']}\n"
+        result += f"Time: {appointment['start_time'].strftime('%Y-%m-%d at %H:%M')} - {appointment['estimated_end_time'].strftime('%H:%M')}\n"
+        result += f"Address: {appointment['address']}\n"
+        if appointment['notes']:
+            result += f"Notes: {appointment['notes']}\n"
+        
+        return result
+    except Exception as e:
+        logger.error(f"❌ Error in get_previous_task: {type(e).__name__}: {str(e)}")
+        logger.exception("Full traceback:")
+        return f"Error: Failed to get previous task - {str(e)}"
+
+@tool
+def get_next_task(reference_time: str) -> str:
+    """Get the appointment scheduled immediately after a given time.
+    
+    Args:
+        reference_time: Time in YYYY-MM-DD HH:MM format
+    """
+    logger.info(f"🔧 TOOL CALLED: get_next_task(reference_time='{reference_time}')")
+    try:
+        ref_dt = datetime.strptime(reference_time, "%Y-%m-%d %H:%M")
+        
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        cur.execute("""
+            SELECT id, customer_name, appointment_title, notes, start_time, estimated_end_time, address
+            FROM appointments
+            WHERE start_time >= %s
+            ORDER BY start_time ASC
+            LIMIT 1
+        """, (ref_dt,))
+        
+        appointment = cur.fetchone()
+        cur.close()
+        conn.close()
+        
+        if not appointment:
+            return "No next appointment found."
+        
+        result = f"Next Appointment:\n"
+        result += f"[{appointment['id']}] {appointment['appointment_title']} - {appointment['customer_name']}\n"
+        result += f"Time: {appointment['start_time'].strftime('%Y-%m-%d at %H:%M')} - {appointment['estimated_end_time'].strftime('%H:%M')}\n"
+        result += f"Address: {appointment['address']}\n"
+        if appointment['notes']:
+            result += f"Notes: {appointment['notes']}\n"
+        
+        return result
+    except Exception as e:
+        logger.error(f"❌ Error in get_next_task: {type(e).__name__}: {str(e)}")
+        logger.exception("Full traceback:")
+        return f"Error: Failed to get next task - {str(e)}"
+
+@tool
 def check_travel_time(origin: str, destination: str) -> str:
     """Check driving time between two addresses"""
     logger.info(f"🔧 TOOL CALLED: check_travel_time(origin='{origin}', dest='{destination}')")
@@ -255,7 +339,7 @@ def create_calendar_agent():
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite", temperature=0.7)
     
     # Define tools
-    tools = [add_task, list_tasks, delete_task, update_task, check_travel_time]
+    tools = [add_task, list_tasks, delete_task, update_task, get_previous_task, get_next_task, check_travel_time]
     
     # Create system prompt
     system_message = f"""You are a helpful calendar assistant. You can help users:
@@ -267,14 +351,24 @@ def create_calendar_agent():
     Be conversational and helpful. When users ask to schedule something, extract the relevant details
     (title, date, time, description) and use the appropriate tool.
 
+    Always confirm actions and provide clear feedback. Remember previous messages in our conversation.
+
     Today's date is {datetime.now().strftime('%Y-%m-%d')} ({datetime.now().strftime('%A, %B %d, %Y')}).
     If users specify a date without a year, assume they mean this year.
     Do not allow scheduling tasks in the past.
     Do not allow scheduling overlapping tasks.
 
-    When scheduling or updating a task make sure we have time to travel between it and the previous task of the day and the next task of the day.
+    CRITICAL: Before adding or updating any appointment, you MUST:
+    1. Use get_previous_task to find the appointment ending before the new appointment
+    2. If there is a previous appointment, use check_travel_time to calculate drive time from previous address to new address
+    3. Verify there is at least (travel time + 15 minutes) gap between previous appointment end and new appointment start
+    4. Use get_next_task to find the appointment starting after the new appointment
+    5. If there is a next appointment, use check_travel_time to calculate drive time from new address to next address
+    6. Verify there is at least (travel time + 15 minutes) gap between new appointment end and next appointment start
+    7. Only if both checks pass (or no adjacent appointments exist), proceed with add_task or update_task
     
-    Always confirm actions and provide clear feedback. Remember previous messages in our conversation."""
+    If travel time checks fail, inform the user and suggest alternative times.
+    """
 
     # Create agent with memory checkpointer
     memory = MemorySaver()
