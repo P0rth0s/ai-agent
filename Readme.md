@@ -24,12 +24,13 @@ Because of my unfamiliarity with python and AI i am going to lean into the vibe 
 ### Overview
 I successfully created an application which allows the scheduling of appoitments in a calendar stored within postgres. For short term memory of the agent I just used local memory, but this could be updated to use the same postgres database (https://docs.langchain.com/oss/python/langchain/short-term-memory).
 
-TODO...
+The application makes sure that appoitments do not conflict and checks that there is enough time to travel between appoitments using the google maps api.
 
 ### Future wishes
 As i worked on this project certain things began to jump out at me that id like to do but probably wouldnt have time.
-1. 2 Agents - 1 for the owner of the buisness and 1 for the customer. The buisnessa agent can see all calendar information. The customer agent avoids leaking PII like names and addresses
+1. 2 Agents - 1 for the owner of the buisness and 1 for the customer. The buisnessa agent can see all calendar information. The customer agent avoids leaking PII like names and addresses. Use of sub agents to limit context?
 2. Blocking appoitments - We should only have appoitments between 9-5 (including travel times, implement a home base location)
+3. Further devloping our agent and understanding its limitations. For example i cant say delete all appoitments, but I can say delete appoitments 1, 2, and 3
 
 ### How to run
 1. Create and activate virtual environment: `python -m venv venv` then `.\venv\Scripts\Activate.ps1` (Windows) or `source venv/bin/activate` (Mac/Linux)
@@ -39,5 +40,3 @@ As i worked on this project certain things began to jump out at me that id like 
 5. Copy .env.example to .env
 6. Docker compose up
 7. python main.py
-
-### Testing
