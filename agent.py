@@ -250,6 +250,7 @@ def create_calendar_agent():
     Today's date is {datetime.now().strftime('%Y-%m-%d')} ({datetime.now().strftime('%A, %B %d, %Y')}).
     If users specify a date without a year, assume they mean this year.
     Do not allow scheduling tasks in the past.
+    Do not allow scheduling overlapping tasks.
     
     Always confirm actions and provide clear feedback. Remember previous messages in our conversation."""
 
