@@ -22,7 +22,17 @@ At this point I had developed a few goals.
 Because of my unfamiliarity with python and AI i am going to lean into the vibe coding a bit more than i usually would.
 
 ### Overview
+I successfully created an application which allows the scheduling of appoitments in a calendar stored within postgres. For short term memory of the agent I just used local memory, but this could be updated to use the same postgres database (https://docs.langchain.com/oss/python/langchain/short-term-memory).
+
+
 
 ### How to run
+1. Get a gemini api key and set GOOGLE_API_KEY in your .env.example. I reccomend creating a tier 1 account which includes 300$ in credit and has a much higher rate limit than the free tier.
+2. Create a google maps api key and set GOOGLE_MAPS_API_KEY in your .env.example file (https://console.cloud.google.com/google/maps-apis/credentials)
+3. Copy .env.example to .env
+4. Docker compose up
+5. python main.py
+
+TODO
 
 ### Testing

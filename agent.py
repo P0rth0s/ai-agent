@@ -229,13 +229,33 @@ def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] =
         logger.exception("Full traceback:")
         return f"Error: Failed to update appointment - {str(e)}"
 
+import googlemaps
+
+@tool
+def check_travel_time(origin: str, destination: str) -> str:
+    """Check driving time between two addresses"""
+    logger.info(f"🔧 TOOL CALLED: check_travel_time(origin='{origin}', dest='{destination}')")
+    try:
+        gmaps = googlemaps.Client(key=os.getenv("GOOGLE_MAPS_API_KEY"))
+        result = gmaps.distance_matrix(origin, destination, mode="driving")
+        
+        if result['rows'][0]['elements'][0]['status'] == 'OK':
+            duration_seconds = result['rows'][0]['elements'][0]['duration']['value']
+            duration_minutes = duration_seconds / 60
+            return f"Travel time: {int(duration_minutes)} minutes"
+        else:
+            return "Could not calculate travel time"
+    except Exception as e:
+        logger.error(f"❌ Error in check_travel_time: {type(e).__name__}: {str(e)}")
+        return f"Error: {str(e)}"
+
 # Setup the AI agent with memory
 def create_calendar_agent():
     # Initialize the LLM
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite", temperature=0.7)
     
     # Define tools
-    tools = [add_task, list_tasks, delete_task, update_task]
+    tools = [add_task, list_tasks, delete_task, update_task, check_travel_time]
     
     # Create system prompt
     system_message = f"""You are a helpful calendar assistant. You can help users:
@@ -251,6 +271,8 @@ def create_calendar_agent():
     If users specify a date without a year, assume they mean this year.
     Do not allow scheduling tasks in the past.
     Do not allow scheduling overlapping tasks.
+
+    When scheduling or updating a task make sure we have time to travel between it and the previous task of the day and the next task of the day.
     
     Always confirm actions and provide clear feedback. Remember previous messages in our conversation."""
 
@@ -265,3 +287,8 @@ def create_calendar_agent():
     
     logger.info("✅ Calendar agent created with memory")
     return agent
+
+    ### Travel time not working
+    ### Asking for full date still, check address validation and parsing
+    ### We probably want to agents actually one for the owner and one for the customer
+    ### Still want to add long term memory
