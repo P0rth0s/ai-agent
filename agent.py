@@ -5,6 +5,11 @@ import json
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import os
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # Modern LangChain imports
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -31,34 +36,66 @@ def get_db_connection():
 
 # Calendar Tools
 @tool
-def add_task(title: str, date: str, time: str = "09:00", description: str = "", customer_name: str = "Default User", address: str = "") -> str:
-    """Add an appointment to the calendar. Date format: YYYY-MM-DD, Time format: HH:MM"""
+def add_task(title: str, date: str, start_time: str, description: str, customer_name: str, address: str, estimated_end_time: Optional[str] = None) -> str:
+    """Add an appointment to the calendar. All fields are required except estimated_end_time.
+    
+    Args:
+        title: Appointment title (required)
+        date: Date in YYYY-MM-DD format (required)
+        start_time: Time in HH:MM format (required)
+        description: Appointment notes/description (required)
+        customer_name: Customer full name (required)
+        address: Full address (required)
+        estimated_end_time: Estimated end time in HH:MM format (optional, defaults to 1 hour after start)
+    """
+    logger.info(f"🔧 TOOL CALLED: add_task(title='{title}', date='{date}', start_time='{start_time}', customer='{customer_name}', estimated_end='{estimated_end_time}')")
     try:
-        start_time = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
-        # Default to 1 hour duration
-        estimated_end_time = start_time + timedelta(hours=1)
+        start_dt = datetime.strptime(f"{date} {start_time}", "%Y-%m-%d %H:%M")
+        
+        # Only calculate estimated_end_time if not provided
+        if estimated_end_time:
+            end_dt = datetime.strptime(f"{date} {estimated_end_time}", "%Y-%m-%d %H:%M")
+        else:
+            # Default to 1 hour duration
+            end_dt = start_dt + timedelta(hours=1)
         
         conn = get_db_connection()
-        cur = conn.cursor()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Check for overlapping appointments
+        cur.execute("""
+            SELECT id, appointment_title, start_time, estimated_end_time
+            FROM appointments
+            WHERE (start_time, estimated_end_time) OVERLAPS (%s::timestamp, %s::timestamp)
+        """, (start_dt, end_dt))
+        
+        overlapping = cur.fetchone()
+        if overlapping:
+            cur.close()
+            conn.close()
+            return f"Error: This appointment overlaps with existing appointment '{overlapping['appointment_title']}' (ID: {overlapping['id']}) scheduled from {overlapping['start_time'].strftime('%H:%M')} to {overlapping['estimated_end_time'].strftime('%H:%M')}. Please choose a different time."
         
         cur.execute("""
             INSERT INTO appointments (customer_name, address, appointment_title, notes, start_time, estimated_end_time)
             VALUES (%s, %s, %s, %s, %s, %s)
             RETURNING id
-        """, (customer_name, address, title, description, start_time, estimated_end_time))
+        """, (customer_name, address, title, description, start_dt, end_dt))
         
-        appointment_id = cur.fetchone()[0]
+        appointment_id = cur.fetchone()['id']
         conn.commit()
         cur.close()
         conn.close()
         
-        return f"✓ Appointment '{title}' scheduled for {date} at {time} (ID: {appointment_id})"
+        return f"✓ Appointment '{title}' scheduled for {date} at {start_time} (ID: {appointment_id})"
     except Exception as e:
+        logger.error(f"❌ Error in add_task: {type(e).__name__}: {str(e)}")
+        logger.exception("Full traceback:")
         return f"Error: Failed to create appointment - {str(e)}"
 
 @tool
 def list_tasks(date: Optional[str] = None) -> str:
     """List all appointments. Optionally filter by date (YYYY-MM-DD)"""
+    logger.info(f"🔧 TOOL CALLED: list_tasks(date={date})")
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -95,11 +132,14 @@ def list_tasks(date: Optional[str] = None) -> str:
             result += "\n"
         return result
     except Exception as e:
+        logger.error(f"❌ Error in list_tasks: {type(e).__name__}: {str(e)}")
+        logger.exception("Full traceback:")
         return f"Error: Failed to list appointments - {str(e)}"
 
 @tool
 def delete_task(task_id: int) -> str:
     """Delete an appointment from the calendar by its ID"""
+    logger.info(f"🔧 TOOL CALLED: delete_task(task_id={task_id})")
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -117,8 +157,10 @@ def delete_task(task_id: int) -> str:
         cur.close()
         conn.close()
         
-        return f"✓ Deleted appointment: {appointment['appointment_title']}"
+        return f"✓ Deleted appointment: {appointment['appointment_title']} (ID: {task_id})"
     except Exception as e:
+        logger.error(f"❌ Error in delete_task: {type(e).__name__}: {str(e)}")
+        logger.exception("Full traceback:")
         return f"Error: Failed to delete appointment - {str(e)}"
 
 @tool
@@ -126,6 +168,7 @@ def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] =
                 time: Optional[str] = None, description: Optional[str] = None,
                 customer_name: Optional[str] = None, address: Optional[str] = None) -> str:
     """Update an appointment's details. Provide task_id and fields to update."""
+    logger.info(f"🔧 TOOL CALLED: update_task(task_id={task_id}, updates={{title={title}, date={date}, time={time}}})")
     try:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -182,21 +225,17 @@ def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] =
         
         return f"✓ Updated appointment: {result['appointment_title']}"
     except Exception as e:
+        logger.error(f"❌ Error in update_task: {type(e).__name__}: {str(e)}")
+        logger.exception("Full traceback:")
         return f"Error: Failed to update appointment - {str(e)}"
-
-@tool
-def get_today_tasks() -> str:
-    """Get all appointments scheduled for today"""
-    today = datetime.now().strftime("%Y-%m-%d")
-    return list_tasks(today)
 
 # Setup the AI agent with memory
 def create_calendar_agent():
     # Initialize the LLM
-    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.7)
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite", temperature=0.7)
     
     # Define tools
-    tools = [add_task, list_tasks, delete_task, update_task, get_today_tasks]
+    tools = [add_task, list_tasks, delete_task, update_task]
     
     # Create system prompt
     system_message = f"""You are a helpful calendar assistant. You can help users:
@@ -207,11 +246,13 @@ def create_calendar_agent():
     
     Be conversational and helpful. When users ask to schedule something, extract the relevant details
     (title, date, time, description) and use the appropriate tool.
-    
-    Today's date is {datetime.now().strftime('%Y-%m-%d')}.
+
+    Today's date is {datetime.now().strftime('%Y-%m-%d')} ({datetime.now().strftime('%A, %B %d, %Y')}).
+    If users specify a date without a year, assume they mean this year.
+    Do not allow scheduling tasks in the past.
     
     Always confirm actions and provide clear feedback. Remember previous messages in our conversation."""
-    
+
     # Create agent with memory checkpointer
     memory = MemorySaver()
     agent = create_react_agent(
@@ -221,4 +262,5 @@ def create_calendar_agent():
         prompt=system_message
     )
     
+    logger.info("✅ Calendar agent created with memory")
     return agent
