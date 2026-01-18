@@ -28,10 +28,8 @@ TODO...
 
 ### Future wishes
 As i worked on this project certain things began to jump out at me that id like to do but probably wouldnt have time.
-
-TODO... 2 agents
-
-
+1. 2 Agents - 1 for the owner of the buisness and 1 for the customer. The buisnessa agent can see all calendar information. The customer agent avoids leaking PII like names and addresses
+2. Blocking appoitments - We should only have appoitments between 9-5 (including travel times, implement a home base location)
 
 ### How to run
 1. Create and activate virtual environment: `python -m venv venv` then `.\venv\Scripts\Activate.ps1` (Windows) or `source venv/bin/activate` (Mac/Linux)

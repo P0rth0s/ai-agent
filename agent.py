@@ -118,6 +118,44 @@ def add_task(title: str, date: str, start_time: str, description: str, customer_
             conn.close()
             return f"Error: This appointment overlaps with existing appointment '{overlapping['appointment_title']}' (ID: {overlapping['id']}) scheduled from {overlapping['start_time'].strftime('%H:%M')} to {overlapping['estimated_end_time'].strftime('%H:%M')}. Please choose a different time."
         
+        # Check travel time from previous appointment
+        cur.execute("""
+            SELECT id, appointment_title, address, estimated_end_time
+            FROM appointments
+            WHERE estimated_end_time <= %s
+            ORDER BY estimated_end_time DESC
+            LIMIT 1
+        """, (start_dt,))
+        previous_apt = cur.fetchone()
+        
+        if previous_apt and previous_apt['address']:
+            travel_minutes = check_travel_time(previous_apt['address'], address)
+            if travel_minutes is not None:
+                time_gap = (start_dt - previous_apt['estimated_end_time']).total_seconds() / 60
+                if time_gap < travel_minutes:
+                    cur.close()
+                    conn.close()
+                    return f"Error: Not enough travel time from previous appointment '{previous_apt['appointment_title']}' (ID: {previous_apt['id']}). Need {travel_minutes} minutes but only {int(time_gap)} minutes available. Consider scheduling at {(previous_apt['estimated_end_time'] + timedelta(minutes=travel_minutes)).strftime('%H:%M')} or later."
+        
+        # Check travel time to next appointment
+        cur.execute("""
+            SELECT id, appointment_title, address, start_time
+            FROM appointments
+            WHERE start_time >= %s
+            ORDER BY start_time ASC
+            LIMIT 1
+        """, (end_dt,))
+        next_apt = cur.fetchone()
+        
+        if next_apt and next_apt['address']:
+            travel_minutes = check_travel_time(address, next_apt['address'])
+            if travel_minutes is not None:
+                time_gap = (next_apt['start_time'] - end_dt).total_seconds() / 60
+                if time_gap < travel_minutes:
+                    cur.close()
+                    conn.close()
+                    return f"Error: Not enough travel time to next appointment '{next_apt['appointment_title']}' (ID: {next_apt['id']}). Need {travel_minutes} minutes but only {int(time_gap)} minutes available. Consider scheduling earlier or adjusting the end time."
+        
         cur.execute("""
             INSERT INTO appointments (customer_name, address, appointment_title, notes, start_time, estimated_end_time)
             VALUES (%s, %s, %s, %s, %s, %s)
@@ -256,10 +294,90 @@ def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] =
                 conn.close()
                 return f"Error: This time change would overlap with existing appointment '{overlapping['appointment_title']}' (ID: {overlapping['id']}) scheduled from {overlapping['start_time'].strftime('%H:%M')} to {overlapping['estimated_end_time'].strftime('%H:%M')}. Please choose a different time."
             
+            # Check travel time constraints when time is changing
+            appointment_address = address if address else appointment['address']
+            
+            # Check travel time from previous appointment
+            cur.execute("""
+                SELECT id, appointment_title, address, estimated_end_time
+                FROM appointments
+                WHERE estimated_end_time <= %s AND id != %s
+                ORDER BY estimated_end_time DESC
+                LIMIT 1
+            """, (new_start, task_id))
+            previous_apt = cur.fetchone()
+            
+            if previous_apt and previous_apt['address'] and appointment_address:
+                travel_minutes = check_travel_time(previous_apt['address'], appointment_address)
+                if travel_minutes is not None:
+                    time_gap = (new_start - previous_apt['estimated_end_time']).total_seconds() / 60
+                    if time_gap < travel_minutes:
+                        cur.close()
+                        conn.close()
+                        return f"Error: Not enough travel time from previous appointment '{previous_apt['appointment_title']}' (ID: {previous_apt['id']}). Need {travel_minutes} minutes but only {int(time_gap)} minutes available."
+            
+            # Check travel time to next appointment
+            cur.execute("""
+                SELECT id, appointment_title, address, start_time
+                FROM appointments
+                WHERE start_time >= %s AND id != %s
+                ORDER BY start_time ASC
+                LIMIT 1
+            """, (new_end, task_id))
+            next_apt = cur.fetchone()
+            
+            if next_apt and next_apt['address'] and appointment_address:
+                travel_minutes = check_travel_time(appointment_address, next_apt['address'])
+                if travel_minutes is not None:
+                    time_gap = (next_apt['start_time'] - new_end).total_seconds() / 60
+                    if time_gap < travel_minutes:
+                        cur.close()
+                        conn.close()
+                        return f"Error: Not enough travel time to next appointment '{next_apt['appointment_title']}' (ID: {next_apt['id']}). Need {travel_minutes} minutes but only {int(time_gap)} minutes available."
+            
             updates.append("start_time = %s")
             params.append(new_start)
             updates.append("estimated_end_time = %s")
             params.append(new_end)
+        elif address:
+            # If only address is changing (not time), check travel time constraints with current times
+            # Check travel time from previous appointment
+            cur.execute("""
+                SELECT id, appointment_title, address, estimated_end_time
+                FROM appointments
+                WHERE estimated_end_time <= %s AND id != %s
+                ORDER BY estimated_end_time DESC
+                LIMIT 1
+            """, (appointment['start_time'], task_id))
+            previous_apt = cur.fetchone()
+            
+            if previous_apt and previous_apt['address']:
+                travel_minutes = check_travel_time(previous_apt['address'], address)
+                if travel_minutes is not None:
+                    time_gap = (appointment['start_time'] - previous_apt['estimated_end_time']).total_seconds() / 60
+                    if time_gap < travel_minutes:
+                        cur.close()
+                        conn.close()
+                        return f"Error: Changing address would require {travel_minutes} minutes travel time from previous appointment '{previous_apt['appointment_title']}' (ID: {previous_apt['id']}), but only {int(time_gap)} minutes available."
+            
+            # Check travel time to next appointment
+            cur.execute("""
+                SELECT id, appointment_title, address, start_time
+                FROM appointments
+                WHERE start_time >= %s AND id != %s
+                ORDER BY start_time ASC
+                LIMIT 1
+            """, (appointment['estimated_end_time'], task_id))
+            next_apt = cur.fetchone()
+            
+            if next_apt and next_apt['address']:
+                travel_minutes = check_travel_time(address, next_apt['address'])
+                if travel_minutes is not None:
+                    time_gap = (next_apt['start_time'] - appointment['estimated_end_time']).total_seconds() / 60
+                    if time_gap < travel_minutes:
+                        cur.close()
+                        conn.close()
+                        return f"Error: Changing address would require {travel_minutes} minutes travel time to next appointment '{next_apt['appointment_title']}' (ID: {next_apt['id']}), but only {int(time_gap)} minutes available."
         
         if not updates:
             cur.close()
@@ -282,6 +400,31 @@ def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] =
         return f"Error: Failed to update appointment - {str(e)}"
 
 import googlemaps
+
+# Helper function for checking travel time
+def check_travel_time(origin: str, destination: str) -> Optional[int]:
+    """Check driving time between two addresses.
+    
+    Args:
+        origin: Starting address
+        destination: Ending address
+    
+    Returns:
+        Travel time in minutes, or None if calculation fails
+    """
+    try:
+        gmaps = googlemaps.Client(key=os.getenv("GOOGLE_MAPS_API_KEY"))
+        result = gmaps.distance_matrix(origin, destination, mode="driving")
+        
+        if result['rows'][0]['elements'][0]['status'] == 'OK':
+            duration_seconds = result['rows'][0]['elements'][0]['duration']['value']
+            duration_minutes = duration_seconds / 60
+            return int(duration_minutes)
+        else:
+            return None
+    except Exception as e:
+        logger.error(f"❌ Error in check_travel_time: {type(e).__name__}: {str(e)}")
+        return None
 
 @tool
 def get_previous_task(reference_time: str) -> str:
@@ -367,31 +510,13 @@ def get_next_task(reference_time: str) -> str:
         logger.exception("Full traceback:")
         return f"Error: Failed to get next task - {str(e)}"
 
-@tool
-def check_travel_time(origin: str, destination: str) -> str:
-    """Check driving time between two addresses"""
-    logger.info(f"🔧 TOOL CALLED: check_travel_time(origin='{origin}', dest='{destination}')")
-    try:
-        gmaps = googlemaps.Client(key=os.getenv("GOOGLE_MAPS_API_KEY"))
-        result = gmaps.distance_matrix(origin, destination, mode="driving")
-        
-        if result['rows'][0]['elements'][0]['status'] == 'OK':
-            duration_seconds = result['rows'][0]['elements'][0]['duration']['value']
-            duration_minutes = duration_seconds / 60
-            return f"Travel time: {int(duration_minutes)} minutes"
-        else:
-            return "Could not calculate travel time"
-    except Exception as e:
-        logger.error(f"❌ Error in check_travel_time: {type(e).__name__}: {str(e)}")
-        return f"Error: {str(e)}"
-
 # Setup the AI agent with memory
 def create_calendar_agent():
     # Initialize the LLM
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite", temperature=0.7)
     
     # Define tools
-    tools = [add_task, list_tasks, delete_task, update_task, get_previous_task, get_next_task, check_travel_time]
+    tools = [add_task, list_tasks, delete_task, update_task, get_previous_task, get_next_task]
     
     # Create system prompt
     system_message = f"""You are a helpful calendar assistant. You can help users:
@@ -437,6 +562,5 @@ def create_calendar_agent():
     logger.info("✅ Calendar agent created with memory")
     return agent
 
-    ### Travel time not working
     ### We probably want to agents actually one for the owner and one for the customer
     ### Still want to add long term memory
