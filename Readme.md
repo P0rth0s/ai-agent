@@ -42,5 +42,5 @@ As i worked on this project certain things began to jump out at me that id like 
 3. Get a gemini api key and set GOOGLE_API_KEY in your .env.example. I reccomend creating a tier 1 account which includes 300$ in credit and has a much higher rate limit than the free tier.
 4. Create a google maps api key and set GOOGLE_MAPS_API_KEY in your .env.example file (https://console.cloud.google.com/google/maps-apis/credentials)
 5. Copy .env.example to .env
-6. Docker compose up
+6. Docker compose up in a seperate tab
 7. python main.py
