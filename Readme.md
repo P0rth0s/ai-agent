@@ -16,21 +16,24 @@ At this point I had developed a few goals.
 
 1. Play with the agent and get a better undertanding of how my prompt changes its results to the same or similar queries
 2. Short term session memory - I need to better understand what session memory without a database
-3. Interaction with user data through a database or api. Maybe a calendar table in mysql, integrating with google calendar api would be cool if its not to hard.
+3. Interaction with user data through a database or api. Maybe a calendar table in mysql, integrating with a google api would be cool, maybe calendar or maps.
 4. Long term memory - Maybe with a vector database? I havent played with vector databases before so that will be extra lift.
 
-Because of my unfamiliarity with python and AI i am going to lean into the vibe coding a bit more than i usually would.
+Because of my unfamiliarity with python and AI agents i am going to lean into the vibe coding a more than i usually would.
 
 ### Overview
 I successfully created an application which allows the scheduling of appoitments in a calendar stored within postgres. For short term memory of the agent I just used local memory, but this could be updated to use the same postgres database (https://docs.langchain.com/oss/python/langchain/short-term-memory).
 
 The application makes sure that appoitments do not conflict and checks that there is enough time to travel between appoitments using the google maps api.
 
+I then added a vector database that also stores appoitment and user information. This was cool because now if i schedule appoitments for the same customer it tries to relate them together.
+
 ### Future wishes
 As i worked on this project certain things began to jump out at me that id like to do but probably wouldnt have time.
 1. 2 Agents - 1 for the owner of the buisness and 1 for the customer. The buisnessa agent can see all calendar information. The customer agent avoids leaking PII like names and addresses. Use of sub agents to limit context?
 2. Blocking appoitments - We should only have appoitments between 9-5 (including travel times, implement a home base location)
 3. Further devloping our agent and understanding its limitations. For example i cant say delete all appoitments, but I can say delete appoitments 1, 2, and 3
+4. More guardrails, validation, etc
 
 ### How to run
 1. Create and activate virtual environment: `python -m venv venv` then `.\venv\Scripts\Activate.ps1` (Windows) or `source venv/bin/activate` (Mac/Linux)
