@@ -6,7 +6,7 @@ import logging
 
 # Import the agent creator and tools from agent.py
 from agent import create_calendar_agent
-from weaviate_db import close_weaviate_client
+from weaviate_db import close_weaviate_client, store_conversation, get_conversation_context
 import atexit
 
 # Load environment variables
@@ -71,6 +71,12 @@ def main():
             for attempt in range(max_retries):
                 try:
                     logger.info(f"💬 User input: {user_input}")
+                    
+                    # Get relevant conversation context from vector DB
+                    context = get_conversation_context(user_input, max_conversations=3)
+                    if context:
+                        logger.info(f"📚 Found relevant past conversations")
+                    
                     # Invoke agent with memory using thread_id
                     response = agent.invoke(
                         {"messages": [("user", user_input)]},
@@ -87,8 +93,12 @@ def main():
                                 text_parts = [part['text'] for part in content if isinstance(part, dict) and part.get('type') == 'text']
                                 content = ' '.join(text_parts) if text_parts else str(content)
                             print(f"\nBot: {content}")
+                            
+                            # Store conversation in vector database for long-term memory
+                            store_conversation(thread_id, user_input, content)
                         else:
                             print(f"\nBot: {last_message}")
+                            store_conversation(thread_id, user_input, str(last_message))
                     break  # Success, exit retry loop
                     
                 except Exception as e:

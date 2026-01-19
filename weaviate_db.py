@@ -70,6 +70,27 @@ def _initialize_weaviate_collections():
                     logger.info("ℹ️ AppointmentHistory collection already exists")
                 else:
                     raise
+        
+        # Chat History Collection for long-term conversation memory
+        if not client.collections.exists("ChatHistory"):
+            try:
+                client.collections.create(
+                    name="ChatHistory",
+                    vectorizer_config=Configure.Vectorizer.text2vec_transformers(),
+                    properties=[
+                        Property(name="session_id", data_type=DataType.TEXT),
+                        Property(name="user_message", data_type=DataType.TEXT),
+                        Property(name="assistant_response", data_type=DataType.TEXT),
+                        Property(name="timestamp", data_type=DataType.DATE),
+                        Property(name="conversation_context", data_type=DataType.TEXT),  # Combined text for vectorization
+                    ]
+                )
+                logger.info("✅ Created ChatHistory collection")
+            except Exception as create_error:
+                if "already exists" in str(create_error).lower():
+                    logger.info("ℹ️ ChatHistory collection already exists")
+                else:
+                    raise
             
     except Exception as e:
         logger.error(f"❌ Error initializing Weaviate collections: {e}")
@@ -210,3 +231,92 @@ def sync_existing_appointments_to_vector_db():
         
     except Exception as e:
         logger.error(f"❌ Error syncing appointments to vector DB: {e}")
+
+def store_conversation(session_id: str, user_message: str, assistant_response: str):
+    """Store a conversation turn in the vector database for long-term memory
+    
+    Args:
+        session_id: Session/thread identifier
+        user_message: The user's message
+        assistant_response: The assistant's response
+    """
+    try:
+        client = get_weaviate_client()
+        if not client:
+            return
+        
+        # Create combined context for better semantic search
+        conversation_context = f"User asked: {user_message}. Assistant responded: {assistant_response}"
+        
+        chat_collection = client.collections.get("ChatHistory")
+        chat_collection.data.insert({
+            "session_id": session_id,
+            "user_message": user_message,
+            "assistant_response": assistant_response,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "conversation_context": conversation_context
+        })
+        logger.info(f"💾 Stored conversation in vector DB")
+    except Exception as e:
+        logger.error(f"❌ Error storing conversation: {e}")
+
+def find_similar_conversations(query: str, limit: int = 5) -> list:
+    """Find semantically similar past conversations
+    
+    Args:
+        query: Search query (typically current user message)
+        limit: Maximum number of similar conversations to return
+    
+    Returns:
+        List of similar past conversations with context
+    """
+    try:
+        client = get_weaviate_client()
+        if not client:
+            return []
+        
+        chat_collection = client.collections.get("ChatHistory")
+        
+        # Search for semantically similar conversations
+        response = chat_collection.query.near_text(
+            query=query,
+            limit=limit
+        )
+        
+        similar = []
+        for obj in response.objects:
+            similar.append({
+                "user_message": obj.properties["user_message"],
+                "assistant_response": obj.properties["assistant_response"],
+                "timestamp": obj.properties["timestamp"],
+                "session_id": obj.properties["session_id"]
+            })
+        
+        return similar
+    except Exception as e:
+        logger.error(f"❌ Error finding similar conversations: {e}")
+        return []
+
+def get_conversation_context(query: str, max_conversations: int = 3) -> str:
+    """Get relevant conversation context for the current query
+    
+    Args:
+        query: Current user query
+        max_conversations: Maximum number of past conversations to include
+    
+    Returns:
+        Formatted string with relevant past conversation context
+    """
+    similar = find_similar_conversations(query, limit=max_conversations)
+    
+    if not similar:
+        return ""
+    
+    context = "\n\nRelevant past conversations:\n"
+    for i, conv in enumerate(similar, 1):
+        context += f"{i}. Previous discussion:\n"
+        context += f"   User: {conv['user_message'][:150]}...\n" if len(conv['user_message']) > 150 else f"   User: {conv['user_message']}\n"
+        context += f"   Assistant: {conv['assistant_response'][:150]}...\n" if len(conv['assistant_response']) > 150 else f"   Assistant: {conv['assistant_response']}\n"
+        context += f"   (From session: {conv['session_id']}, at {conv['timestamp']})\n\n"
+    
+    return context

@@ -35,7 +35,8 @@ from weaviate_db import (
     find_related_appointments,
     store_appointment_in_vector_db,
     sync_existing_appointments_to_vector_db,
-    close_weaviate_client
+    close_weaviate_client,
+    find_similar_conversations
 )
 
 # Load environment variables
@@ -404,6 +405,34 @@ def find_similar_appointments(customer_name: str, search_description: str) -> st
         logger.error(f"❌ Error in find_similar_appointments: {e}")
         return f"Error: Failed to find similar appointments - {str(e)}"
 
+@tool
+def search_conversation_history(search_query: str) -> str:
+    """Search through past conversation history to find relevant discussions.
+    
+    Use this when the user asks about previous conversations or when you need context from past discussions.
+    
+    Args:
+        search_query: What to search for in past conversations (topics, questions, appointments discussed, etc.)
+    """
+    logger.info(f"🔧 TOOL CALLED: search_conversation_history(query='{search_query}')")
+    try:
+        similar = find_similar_conversations(search_query, limit=5)
+        
+        if not similar:
+            return "No relevant past conversations found."
+        
+        result = "📚 Relevant past conversations:\n\n"
+        for i, conv in enumerate(similar, 1):
+            result += f"{i}. Previous discussion:\n"
+            result += f"   User: {conv['user_message'][:200]}...\n" if len(conv['user_message']) > 200 else f"   User: {conv['user_message']}\n"
+            result += f"   Assistant: {conv['assistant_response'][:200]}...\n" if len(conv['assistant_response']) > 200 else f"   Assistant: {conv['assistant_response']}\n"
+            result += f"   Time: {conv['timestamp']}\n\n"
+        
+        return result
+    except Exception as e:
+        logger.error(f"❌ Error in search_conversation_history: {e}")
+        return f"Error: Failed to search conversation history - {str(e)}"
+
 # Setup the AI agent with memory
 def create_calendar_agent():
     # Initialize the LLM
@@ -411,15 +440,23 @@ def create_calendar_agent():
     
     # Define tools
     tools = [add_task, list_tasks, delete_task, update_task, get_previous_task, get_next_task, 
-             find_similar_appointments]
+             find_similar_appointments, search_conversation_history]
     
     # Create system prompt
-    system_message = f"""You are a helpful calendar assistant with long-term memory. You can help users:
+    system_message = f"""You are a helpful calendar assistant with both short-term and long-term memory. You can help users:
     - Schedule tasks and events
     - View their calendar
     - Update or delete tasks
     - Check what's scheduled for today or specific dates
     - Find related past appointments using semantic search
+    - Search through past conversation history
+    
+    MEMORY CAPABILITIES:
+    - SHORT-TERM: You remember the current conversation session through your built-in memory
+    - LONG-TERM: All conversations are stored in a vector database and can be searched semantically
+    - Past conversations are automatically retrieved when they're relevant to the current discussion
+    - Use search_conversation_history tool when the user explicitly asks about past conversations
+    - When scheduling appointments, the system automatically checks for related past work
     
     IMPORTANT: When scheduling a new appointment, the system will automatically check for related past appointments.
     If related appointments are found, inform the user about them as they might be relevant (follow-up work, recurring issues, etc.).
