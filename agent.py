@@ -544,6 +544,3 @@ def create_calendar_agent():
     
     logger.info("✅ Calendar agent created with memory")
     return agent
-
-    ### We probably want to agents actually one for the owner and one for the customer
-    ### Still want to add long term memory
