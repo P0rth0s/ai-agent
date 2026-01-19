@@ -1,11 +1,8 @@
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 from typing import Optional
-import json
-import psycopg2
-from psycopg2.extras import RealDictCursor
-import os
 import logging
+from psycopg2.extras import RealDictCursor
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -13,250 +10,24 @@ logger = logging.getLogger(__name__)
 
 # Modern LangChain imports
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.tools import tool
 
 # LangGraph imports for agent with memory
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
 
+# Import specialized modules
+from sql_db import get_db_connection, check_appointment_overlap
+from maps import check_travel_time
+from weaviate_db import (
+    find_related_appointments,
+    store_appointment_in_vector_db,
+    sync_existing_appointments_to_vector_db,
+    close_weaviate_client
+)
+
 # Load environment variables
 load_dotenv()
-
-import weaviate
-from weaviate.classes.init import Auth
-from weaviate.classes.config import Configure, Property, DataType
-
-# Weaviate client (for long-term memory)
-_weaviate_client = None
-
-def get_weaviate_client():
-    """Get or create Weaviate client for vector storage"""
-    global _weaviate_client
-    if _weaviate_client is None:
-        try:
-            _weaviate_client = weaviate.connect_to_local(
-                host=os.getenv("WEAVIATE_HOST", "localhost"),
-                port=int(os.getenv("WEAVIATE_PORT", "8080"))
-            )
-            logger.info("✅ Connected to Weaviate")
-            _initialize_weaviate_collections()
-        except Exception as e:
-            logger.error(f"❌ Failed to connect to Weaviate: {e}")
-    return _weaviate_client
-
-def _initialize_weaviate_collections():
-    """Initialize Weaviate collections for appointment storage"""
-    try:
-        client = _weaviate_client
-        
-        # Appointment History Collection for semantic search
-        if not client.collections.exists("AppointmentHistory"):
-            try:
-                client.collections.create(
-                    name="AppointmentHistory",
-                    vectorizer_config=Configure.Vectorizer.text2vec_transformers(),
-                    properties=[
-                        Property(name="appointment_id", data_type=DataType.INT),
-                        Property(name="customer_name", data_type=DataType.TEXT),
-                        Property(name="title", data_type=DataType.TEXT),
-                        Property(name="description", data_type=DataType.TEXT),
-                        Property(name="address", data_type=DataType.TEXT),
-                        Property(name="start_time", data_type=DataType.DATE),
-                        Property(name="completion_date", data_type=DataType.DATE),
-                        Property(name="combined_text", data_type=DataType.TEXT),  # For vectorization
-                    ]
-                )
-                logger.info("✅ Created AppointmentHistory collection")
-            except Exception as create_error:
-                if "already exists" in str(create_error).lower():
-                    logger.info("ℹ️ AppointmentHistory collection already exists")
-                else:
-                    raise
-            
-    except Exception as e:
-        logger.error(f"❌ Error initializing Weaviate collections: {e}")
-
-# Database connection helper
-def get_db_connection():
-    """Create and return a database connection"""
-    return psycopg2.connect(
-        host=os.getenv("DB_HOST", "localhost"),
-        port=os.getenv("DB_PORT", "5432"),
-        database=os.getenv("DB_NAME", "ai_agent_db"),
-        user=os.getenv("DB_USER", "postgres"),
-        password=os.getenv("DB_PASSWORD", "postgres")
-    )
-
-# Helper function for checking appointment overlaps
-def check_appointment_overlap(cur, start_dt: datetime, end_dt: datetime, exclude_id: Optional[int] = None) -> Optional[dict]:
-    """Check if an appointment overlaps with existing appointments.
-    
-    Args:
-        cur: Database cursor
-        start_dt: Start datetime of appointment
-        end_dt: End datetime of appointment
-        exclude_id: Optional appointment ID to exclude from overlap check (for updates)
-    
-    Returns:
-        Dictionary with overlapping appointment details if overlap exists, None otherwise
-    """
-    if exclude_id:
-        cur.execute("""
-            SELECT id, appointment_title, start_time, estimated_end_time
-            FROM appointments
-            WHERE (start_time, estimated_end_time) OVERLAPS (%s::timestamp, %s::timestamp)
-            AND id != %s
-        """, (start_dt, end_dt, exclude_id))
-    else:
-        cur.execute("""
-            SELECT id, appointment_title, start_time, estimated_end_time
-            FROM appointments
-            WHERE (start_time, estimated_end_time) OVERLAPS (%s::timestamp, %s::timestamp)
-        """, (start_dt, end_dt))
-    
-    return cur.fetchone()
-
-# Vector Database Helper Functions
-def store_appointment_in_vector_db(appointment_id: int, customer_name: str, title: str, 
-                                   description: str, address: str, start_time: datetime):
-    """Store appointment in vector database for semantic search"""
-    try:
-        client = get_weaviate_client()
-        if client:
-            # Combine relevant fields for vectorization
-            combined_text = f"Title: {title}. Description: {description}. Address: {address}. Customer: {customer_name}"
-            
-            # Convert datetime to RFC3339 format with timezone
-            # Assume local timezone if naive datetime
-            if start_time.tzinfo is None:
-                from datetime import timezone
-                start_time = start_time.replace(tzinfo=timezone.utc)
-            
-            appointment_collection = client.collections.get("AppointmentHistory")
-            appointment_collection.data.insert({
-                "appointment_id": appointment_id,
-                "customer_name": customer_name.lower(),
-                "title": title,
-                "description": description,
-                "address": address,
-                "start_time": start_time.isoformat(),
-                "completion_date": None,  # Will be set when appointment is completed
-                "combined_text": combined_text
-            })
-            logger.info(f"💾 Stored appointment {appointment_id} in vector DB")
-    except Exception as e:
-        logger.error(f"❌ Error storing appointment in vector DB: {e}")
-
-def find_related_appointments(customer_name: str, title: str, description: str, address: str, limit: int = 3) -> list:
-    """Find semantically similar past appointments for a customer
-    
-    Args:
-        customer_name: Customer's name
-        title: New appointment title
-        description: New appointment description
-        address: New appointment address
-        limit: Maximum number of related appointments to return
-    
-    Returns:
-        List of related appointments with similarity scores
-    """
-    try:
-        client = get_weaviate_client()
-        if not client:
-            return []
-        
-        # Create search query combining all relevant information
-        search_query = f"Title: {title}. Description: {description}. Address: {address}"
-        
-        appointment_collection = client.collections.get("AppointmentHistory")
-        
-        # Search for similar appointments for this customer
-        response = appointment_collection.query.near_text(
-            query=search_query,
-            limit=limit * 2  # Get more results to filter by customer
-        )
-        
-        # Filter by customer and format results
-        related = []
-        for obj in response.objects:
-            if obj.properties["customer_name"].lower() == customer_name.lower():
-                related.append({
-                    "appointment_id": obj.properties["appointment_id"],
-                    "title": obj.properties["title"],
-                    "description": obj.properties["description"],
-                    "address": obj.properties["address"],
-                    "start_time": obj.properties["start_time"],
-                    "similarity_score": obj.metadata.score if hasattr(obj.metadata, 'score') else None
-                })
-                if len(related) >= limit:
-                    break
-        
-        return related
-    except Exception as e:
-        logger.error(f"❌ Error finding related appointments: {e}")
-        return []
-
-def sync_existing_appointments_to_vector_db():
-    """One-time sync of existing appointments to vector database"""
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        
-        cur.execute("""
-            SELECT id, customer_name, appointment_title, notes, address, start_time
-            FROM appointments
-            ORDER BY start_time
-        """)
-        
-        appointments = cur.fetchall()
-        cur.close()
-        conn.close()
-        
-        if not appointments:
-            logger.info("No appointments to sync")
-            return
-        
-        client = get_weaviate_client()
-        if not client:
-            logger.error("Cannot sync - Weaviate not connected")
-            return
-        
-        # Check if appointments already exist in vector DB
-        appointment_collection = client.collections.get("AppointmentHistory")
-        
-        synced = 0
-        for apt in appointments:
-            # Check if this appointment is already in vector DB
-            try:
-                existing = appointment_collection.query.fetch_objects(
-                    filters={
-                        "path": ["appointment_id"],
-                        "operator": "Equal",
-                        "valueInt": apt['id']
-                    },
-                    limit=1
-                )
-                
-                if len(existing.objects) == 0:
-                    # Not in vector DB, add it
-                    store_appointment_in_vector_db(
-                        apt['id'],
-                        apt['customer_name'],
-                        apt['appointment_title'],
-                        apt['notes'] or "",
-                        apt['address'] or "",
-                        apt['start_time']
-                    )
-                    synced += 1
-            except Exception as e:
-                logger.error(f"Error syncing appointment {apt['id']}: {e}")
-                continue
-        
-        logger.info(f"✅ Synced {synced} appointments to vector database")
-        
-    except Exception as e:
-        logger.error(f"❌ Error syncing appointments to vector DB: {e}")
 
 # Calendar Tools
 @tool
@@ -586,33 +357,6 @@ def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] =
         logger.exception("Full traceback:")
         return f"Error: Failed to update appointment - {str(e)}"
 
-import googlemaps
-
-# Helper function for checking travel time
-def check_travel_time(origin: str, destination: str) -> Optional[int]:
-    """Check driving time between two addresses.
-    
-    Args:
-        origin: Starting address
-        destination: Ending address
-    
-    Returns:
-        Travel time in minutes, or None if calculation fails
-    """
-    try:
-        gmaps = googlemaps.Client(key=os.getenv("GOOGLE_MAPS_API_KEY"))
-        result = gmaps.distance_matrix(origin, destination, mode="driving")
-        
-        if result['rows'][0]['elements'][0]['status'] == 'OK':
-            duration_seconds = result['rows'][0]['elements'][0]['duration']['value']
-            duration_minutes = duration_seconds / 60
-            return int(duration_minutes)
-        else:
-            return None
-    except Exception as e:
-        logger.error(f"❌ Error in check_travel_time: {type(e).__name__}: {str(e)}")
-        return None
-
 @tool
 def get_previous_task(reference_time: str) -> str:
     """Get the appointment scheduled immediately before a given time.
@@ -733,7 +477,8 @@ def create_calendar_agent():
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite", temperature=0.7)
     
     # Define tools
-    tools = [add_task, list_tasks, delete_task, update_task, get_previous_task, get_next_task, find_similar_appointments]
+    tools = [add_task, list_tasks, delete_task, update_task, get_previous_task, get_next_task, 
+             find_similar_appointments]
     
     # Create system prompt
     system_message = f"""You are a helpful calendar assistant with long-term memory. You can help users:

@@ -6,6 +6,8 @@ import logging
 
 # Import the agent creator and tools from agent.py
 from agent import create_calendar_agent
+from weaviate_db import close_weaviate_client
+import atexit
 
 # Load environment variables
 load_dotenv()
@@ -13,6 +15,9 @@ load_dotenv()
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# Register cleanup function to close Weaviate connection on exit
+atexit.register(close_weaviate_client)
 
 def format_error(error):
     """Extract and format the main error message"""
@@ -99,6 +104,7 @@ def main():
                 
         except KeyboardInterrupt:
             print("\n\nGoodbye!")
+            close_weaviate_client()  # Explicitly close connection on exit
             break
         except Exception as e:
             formatted_error = format_error(e)

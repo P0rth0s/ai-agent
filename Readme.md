@@ -31,9 +31,12 @@ I then added a vector database that also stores appoitment and user information.
 ### Future wishes
 As i worked on this project certain things began to jump out at me that id like to do but probably wouldnt have time.
 1. 2 Agents - 1 for the owner of the buisness and 1 for the customer. The buisnessa agent can see all calendar information. The customer agent avoids leaking PII like names and addresses. Use of sub agents to limit context?
-2. Blocking appoitments - We should only have appoitments between 9-5 (including travel times, implement a home base location)
-3. Further devloping our agent and understanding its limitations. For example i cant say delete all appoitments, but I can say delete appoitments 1, 2, and 3
-4. More guardrails, validation, etc
+2. Further devloping our agent and understanding its limitations. For example i cant say delete all appoitments, but I can say delete appoitments 1, 2, and 3
+3. Playing with vector db more
+4. Playing with vector db more
+5. More guardrails, validation, etc
+6. Blocking appoitments more - We should only have appoitments between 9-5 (including travel times, implement a home base location)
+5. Playing with vector db more
 
 ### How to run
 1. Create and activate virtual environment: `python -m venv venv` then `.\venv\Scripts\Activate.ps1` (Windows) or `source venv/bin/activate` (Mac/Linux)
