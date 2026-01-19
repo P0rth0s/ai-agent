@@ -4,6 +4,7 @@ import os
 import logging
 import weaviate
 from weaviate.classes.config import Configure, Property, DataType
+from weaviate.classes.query import Filter
 from psycopg2.extras import RealDictCursor
 
 # Configure logging
@@ -186,11 +187,7 @@ def sync_existing_appointments_to_vector_db():
             # Check if this appointment is already in vector DB
             try:
                 existing = appointment_collection.query.fetch_objects(
-                    filters={
-                        "path": ["appointment_id"],
-                        "operator": "Equal",
-                        "valueInt": apt['id']
-                    },
+                    filters=Filter.by_property("appointment_id").equal(apt['id']),
                     limit=1
                 )
                 

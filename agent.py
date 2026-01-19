@@ -17,7 +17,19 @@ from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
 
 # Import specialized modules
-from sql_db import get_db_connection, check_appointment_overlap
+from sql_db import (
+    get_db_connection, 
+    check_appointment_overlap,
+    get_previous_appointment,
+    get_next_appointment,
+    get_previous_appointment_full,
+    get_next_appointment_full,
+    get_all_appointments,
+    get_appointment_by_id,
+    insert_appointment,
+    delete_appointment_by_id,
+    update_appointment_fields
+)
 from maps import check_travel_time
 from weaviate_db import (
     find_related_appointments,
@@ -74,14 +86,7 @@ def add_task(title: str, date: str, start_time: str, description: str, customer_
             return f"Error: This appointment overlaps with existing appointment '{overlapping['appointment_title']}' (ID: {overlapping['id']}) scheduled from {overlapping['start_time'].strftime('%H:%M')} to {overlapping['estimated_end_time'].strftime('%H:%M')}. Please choose a different time."
         
         # Check travel time from previous appointment
-        cur.execute("""
-            SELECT id, appointment_title, address, estimated_end_time
-            FROM appointments
-            WHERE estimated_end_time <= %s
-            ORDER BY estimated_end_time DESC
-            LIMIT 1
-        """, (start_dt,))
-        previous_apt = cur.fetchone()
+        previous_apt = get_previous_appointment(cur, start_dt)
         
         if previous_apt and previous_apt['address']:
             travel_minutes = check_travel_time(previous_apt['address'], address)
@@ -93,14 +98,7 @@ def add_task(title: str, date: str, start_time: str, description: str, customer_
                     return f"Error: Not enough travel time from previous appointment '{previous_apt['appointment_title']}' (ID: {previous_apt['id']}). Need {travel_minutes} minutes but only {int(time_gap)} minutes available. Consider scheduling at {(previous_apt['estimated_end_time'] + timedelta(minutes=travel_minutes)).strftime('%H:%M')} or later."
         
         # Check travel time to next appointment
-        cur.execute("""
-            SELECT id, appointment_title, address, start_time
-            FROM appointments
-            WHERE start_time >= %s
-            ORDER BY start_time ASC
-            LIMIT 1
-        """, (end_dt,))
-        next_apt = cur.fetchone()
+        next_apt = get_next_appointment(cur, end_dt)
         
         if next_apt and next_apt['address']:
             travel_minutes = check_travel_time(address, next_apt['address'])
@@ -111,13 +109,7 @@ def add_task(title: str, date: str, start_time: str, description: str, customer_
                     conn.close()
                     return f"Error: Not enough travel time to next appointment '{next_apt['appointment_title']}' (ID: {next_apt['id']}). Need {travel_minutes} minutes but only {int(time_gap)} minutes available. Consider scheduling earlier or adjusting the end time."
         
-        cur.execute("""
-            INSERT INTO appointments (customer_name, address, appointment_title, notes, start_time, estimated_end_time)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            RETURNING id
-        """, (customer_name, address, title, description, start_dt, end_dt))
-        
-        appointment_id = cur.fetchone()['id']
+        appointment_id = insert_appointment(cur, customer_name, address, title, description, start_dt, end_dt)
         conn.commit()
         cur.close()
         conn.close()
@@ -139,21 +131,7 @@ def list_tasks(date: Optional[str] = None) -> str:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
         
-        if date:
-            cur.execute("""
-                SELECT id, customer_name, appointment_title, notes, start_time, estimated_end_time, address
-                FROM appointments
-                WHERE DATE(start_time) = %s
-                ORDER BY start_time
-            """, (date,))
-        else:
-            cur.execute("""
-                SELECT id, customer_name, appointment_title, notes, start_time, estimated_end_time, address
-                FROM appointments
-                ORDER BY start_time
-            """)
-        
-        appointments = cur.fetchall()
+        appointments = get_all_appointments(cur, date)
         cur.close()
         conn.close()
         
@@ -183,20 +161,18 @@ def delete_task(task_id: int) -> str:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
         
-        cur.execute("SELECT appointment_title FROM appointments WHERE id = %s", (task_id,))
-        appointment = cur.fetchone()
+        appointment_title = delete_appointment_by_id(cur, task_id)
         
-        if not appointment:
+        if not appointment_title:
             cur.close()
             conn.close()
             return f"Error: Appointment with ID {task_id} not found."
         
-        cur.execute("DELETE FROM appointments WHERE id = %s", (task_id,))
         conn.commit()
         cur.close()
         conn.close()
         
-        return f"✓ Deleted appointment: {appointment['appointment_title']} (ID: {task_id})"
+        return f"✓ Deleted appointment: {appointment_title} (ID: {task_id})"
     except Exception as e:
         logger.error(f"❌ Error in delete_task: {type(e).__name__}: {str(e)}")
         logger.exception("Full traceback:")
@@ -213,8 +189,7 @@ def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] =
         cur = conn.cursor(cursor_factory=RealDictCursor)
         
         # Get current appointment
-        cur.execute("SELECT * FROM appointments WHERE id = %s", (task_id,))
-        appointment = cur.fetchone()
+        appointment = get_appointment_by_id(cur, task_id)
         
         if not appointment:
             cur.close()
@@ -256,14 +231,7 @@ def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] =
             appointment_address = address if address else appointment['address']
             
             # Check travel time from previous appointment
-            cur.execute("""
-                SELECT id, appointment_title, address, estimated_end_time
-                FROM appointments
-                WHERE estimated_end_time <= %s AND id != %s
-                ORDER BY estimated_end_time DESC
-                LIMIT 1
-            """, (new_start, task_id))
-            previous_apt = cur.fetchone()
+            previous_apt = get_previous_appointment(cur, new_start, exclude_id=task_id)
             
             if previous_apt and previous_apt['address'] and appointment_address:
                 travel_minutes = check_travel_time(previous_apt['address'], appointment_address)
@@ -275,14 +243,7 @@ def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] =
                         return f"Error: Not enough travel time from previous appointment '{previous_apt['appointment_title']}' (ID: {previous_apt['id']}). Need {travel_minutes} minutes but only {int(time_gap)} minutes available."
             
             # Check travel time to next appointment
-            cur.execute("""
-                SELECT id, appointment_title, address, start_time
-                FROM appointments
-                WHERE start_time >= %s AND id != %s
-                ORDER BY start_time ASC
-                LIMIT 1
-            """, (new_end, task_id))
-            next_apt = cur.fetchone()
+            next_apt = get_next_appointment(cur, new_end, exclude_id=task_id)
             
             if next_apt and next_apt['address'] and appointment_address:
                 travel_minutes = check_travel_time(appointment_address, next_apt['address'])
@@ -300,14 +261,7 @@ def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] =
         elif address:
             # If only address is changing (not time), check travel time constraints with current times
             # Check travel time from previous appointment
-            cur.execute("""
-                SELECT id, appointment_title, address, estimated_end_time
-                FROM appointments
-                WHERE estimated_end_time <= %s AND id != %s
-                ORDER BY estimated_end_time DESC
-                LIMIT 1
-            """, (appointment['start_time'], task_id))
-            previous_apt = cur.fetchone()
+            previous_apt = get_previous_appointment(cur, appointment['start_time'], exclude_id=task_id)
             
             if previous_apt and previous_apt['address']:
                 travel_minutes = check_travel_time(previous_apt['address'], address)
@@ -319,14 +273,7 @@ def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] =
                         return f"Error: Changing address would require {travel_minutes} minutes travel time from previous appointment '{previous_apt['appointment_title']}' (ID: {previous_apt['id']}), but only {int(time_gap)} minutes available."
             
             # Check travel time to next appointment
-            cur.execute("""
-                SELECT id, appointment_title, address, start_time
-                FROM appointments
-                WHERE start_time >= %s AND id != %s
-                ORDER BY start_time ASC
-                LIMIT 1
-            """, (appointment['estimated_end_time'], task_id))
-            next_apt = cur.fetchone()
+            next_apt = get_next_appointment(cur, appointment['estimated_end_time'], exclude_id=task_id)
             
             if next_apt and next_apt['address']:
                 travel_minutes = check_travel_time(address, next_apt['address'])
@@ -342,16 +289,18 @@ def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] =
             conn.close()
             return "No updates provided."
         
-        params.append(task_id)
-        query = f"UPDATE appointments SET {', '.join(updates)} WHERE id = %s RETURNING appointment_title"
+        result_title = update_appointment_fields(cur, task_id, updates, params)
         
-        cur.execute(query, params)
-        result = cur.fetchone()
+        if not result_title:
+            cur.close()
+            conn.close()
+            return f"Error: Failed to update appointment {task_id}"
+        
         conn.commit()
         cur.close()
         conn.close()
         
-        return f"✓ Updated appointment: {result['appointment_title']}"
+        return f"✓ Updated appointment: {result_title}"
     except Exception as e:
         logger.error(f"❌ Error in update_task: {type(e).__name__}: {str(e)}")
         logger.exception("Full traceback:")
@@ -371,15 +320,7 @@ def get_previous_task(reference_time: str) -> str:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
         
-        cur.execute("""
-            SELECT id, customer_name, appointment_title, notes, start_time, estimated_end_time, address
-            FROM appointments
-            WHERE estimated_end_time <= %s
-            ORDER BY estimated_end_time DESC
-            LIMIT 1
-        """, (ref_dt,))
-        
-        appointment = cur.fetchone()
+        appointment = get_previous_appointment_full(cur, ref_dt)
         cur.close()
         conn.close()
         
@@ -413,15 +354,7 @@ def get_next_task(reference_time: str) -> str:
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
         
-        cur.execute("""
-            SELECT id, customer_name, appointment_title, notes, start_time, estimated_end_time, address
-            FROM appointments
-            WHERE start_time >= %s
-            ORDER BY start_time ASC
-            LIMIT 1
-        """, (ref_dt,))
-        
-        appointment = cur.fetchone()
+        appointment = get_next_appointment_full(cur, ref_dt)
         cur.close()
         conn.close()
         
