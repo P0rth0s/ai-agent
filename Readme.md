@@ -39,7 +39,7 @@ As i worked on this project certain things began to jump out at me that id like 
 ### How to run
 1. Create and activate virtual environment: `python -m venv venv` then `.\venv\Scripts\Activate.ps1` (Windows) or `source venv/bin/activate` (Mac/Linux)
 2. Install dependencies: `pip install -r requirements.txt`
-3. Get a gemini api key and set GOOGLE_API_KEY in your .env.example. I reccomend creating a tier 1 account which includes 300$ in credit and has a much higher rate limit than the free tier.
+3. Get a gemini api key and set GOOGLE_API_KEY in your .env.example. I reccomend creating a tier 1 account which includes 300$ in credit and has a much higher rate limit than the free tier. (https://aistudio.google.com/api-keys)
 4. Create a google maps api key and set GOOGLE_MAPS_API_KEY in your .env.example file (https://console.cloud.google.com/google/maps-apis/credentials)
 5. Copy .env.example to .env
 6. Docker compose up in a seperate tab
