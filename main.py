@@ -13,7 +13,7 @@ import atexit
 load_dotenv()
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Register cleanup function to close Weaviate connection on exit
@@ -88,17 +88,40 @@ def main():
                         last_message = response["messages"][-1]
                         if hasattr(last_message, 'content'):
                             content = last_message.content
-                            # Extract text if it's a list
-                            if isinstance(content, list):
-                                text_parts = [part['text'] for part in content if isinstance(part, dict) and part.get('type') == 'text']
-                                content = ' '.join(text_parts) if text_parts else str(content)
-                            print(f"\nBot: {content}")
                             
-                            # Store conversation in vector database for long-term memory
-                            store_conversation(thread_id, user_input, content)
+                            # Debug: print raw content type
+                            if isinstance(content, list):
+                                # Extract text if it's a list
+                                text_parts = [part.get('text', '') for part in content if isinstance(part, dict) and 'text' in part]
+                                if text_parts:
+                                    content = ' '.join(text_parts)
+                                else:
+                                    # Try alternative extraction
+                                    content = str(content)
+                            elif not isinstance(content, str):
+                                content = str(content)
+                            
+                            # Ensure content is string and check if meaningful
+                            content_str = str(content).strip()
+                            if content_str and content_str not in ['[]', '{}', 'None', '']:
+                                print(f"\nBot: {content_str}")
+                                # Store conversation in vector database for long-term memory
+                                store_conversation(thread_id, user_input, content_str)
+                            else:
+                                logger.warning(f"⚠️ Empty or invalid response: {repr(content)}")
+                                print("\nBot: [No response generated]")
                         else:
-                            print(f"\nBot: {last_message}")
-                            store_conversation(thread_id, user_input, str(last_message))
+                            # Fallback if no content attribute
+                            response_text = str(last_message).strip()
+                            if response_text:
+                                print(f"\nBot: {response_text}")
+                                store_conversation(thread_id, user_input, response_text)
+                            else:
+                                logger.warning("⚠️ No content attribute in message")
+                                print("\nBot: [No response generated]")
+                    else:
+                        logger.error("❌ Invalid response structure from agent")
+                        print("\nBot: [Error: Invalid response received]")
                     break  # Success, exit retry loop
                     
                 except Exception as e:

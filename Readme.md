@@ -26,17 +26,15 @@ I successfully created an application which allows the scheduling of appoitments
 
 The application makes sure that appoitments do not conflict and checks that there is enough time to travel between appoitments using the google maps api.
 
-I then added a vector database that also stores appoitment and user information. This was cool because now if i schedule appoitments for the same customer it tries to relate them together.
+I then added a vector database that also stores appoitment information and past messages. This was cool because now if i schedule appoitments for the same customer it tries to relate them together.
 
 ### Future wishes
-As i worked on this project certain things began to jump out at me that id like to do but probably wouldnt have time.
+As i worked on this project certain things began to jump out at me that id like to do but probably wouldnt have time. However I was hitting the 6 hour mark so it was time to wrap things up.
 1. 2 Agents - 1 for the owner of the buisness and 1 for the customer. The buisnessa agent can see all calendar information. The customer agent avoids leaking PII like names and addresses. Use of sub agents to limit context?
 2. Further devloping our agent and understanding its limitations. For example i cant say delete all appoitments, but I can say delete appoitments 1, 2, and 3
-3. Playing with vector db more
-4. Playing with vector db more
-5. More guardrails, validation, etc
-6. Blocking appoitments more - We should only have appoitments between 9-5 (including travel times, implement a home base location)
-5. Playing with vector db more
+3. Playing with vector db more and how it can power new appt scheduling from the history
+4. More guardrails, validation, etc
+5. Blocking appoitments more - We should only have appoitments between 9-5 (including travel times, implement a home base location)
 
 ### How to run
 1. Create and activate virtual environment: `python -m venv venv` then `.\venv\Scripts\Activate.ps1` (Windows) or `source venv/bin/activate` (Mac/Linux)

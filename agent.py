@@ -5,7 +5,7 @@ import logging
 from psycopg2.extras import RealDictCursor
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Modern LangChain imports
@@ -55,6 +55,9 @@ def add_task(title: str, date: str, start_time: str, description: str, customer_
         customer_name: Customer full name (required)
         address: Full address (required)
         estimated_end_time: Estimated end time in HH:MM format (optional, defaults to 1 hour after start)
+    
+    Returns:
+        Success message with appointment ID and any related past appointments found, or error message if scheduling conflicts exist (overlap, insufficient travel time).
     """
     logger.info(f"🔧 TOOL CALLED: add_task(title='{title}', date='{date}', start_time='{start_time}', customer='{customer_name}', estimated_end='{estimated_end_time}')")
     try:
@@ -126,7 +129,14 @@ def add_task(title: str, date: str, start_time: str, description: str, customer_
 
 @tool
 def list_tasks(date: Optional[str] = None) -> str:
-    """List all appointments. Optionally filter by date (YYYY-MM-DD)"""
+    """List all appointments with complete details including ID, title, customer, time, address, and notes.
+    
+    Args:
+        date: Optional date filter in YYYY-MM-DD format. If not provided, returns ALL appointments.
+    
+    Returns:
+        Complete formatted list of all appointments with full details. Always present this information directly to the user without asking if they want to see more.
+    """
     logger.info(f"🔧 TOOL CALLED: list_tasks(date={date})")
     try:
         conn = get_db_connection()
@@ -156,7 +166,14 @@ def list_tasks(date: Optional[str] = None) -> str:
 
 @tool
 def delete_task(task_id: int) -> str:
-    """Delete an appointment from the calendar by its ID"""
+    """Delete an appointment from the calendar by its ID.
+    
+    Args:
+        task_id: The ID of the appointment to delete
+    
+    Returns:
+        Success message with the deleted appointment's title, or error if appointment not found.
+    """
     logger.info(f"🔧 TOOL CALLED: delete_task(task_id={task_id})")
     try:
         conn = get_db_connection()
@@ -183,7 +200,20 @@ def delete_task(task_id: int) -> str:
 def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] = None, 
                 time: Optional[str] = None, description: Optional[str] = None,
                 customer_name: Optional[str] = None, address: Optional[str] = None) -> str:
-    """Update an appointment's details. Provide task_id and fields to update."""
+    """Update an appointment's details. Provide task_id and fields to update.
+    
+    Args:
+        task_id: ID of the appointment to update
+        title: New appointment title (optional)
+        date: New date in YYYY-MM-DD format (optional)
+        time: New start time in HH:MM format (optional)
+        description: New description/notes (optional)
+        customer_name: New customer name (optional)
+        address: New address (optional)
+    
+    Returns:
+        Success message with updated appointment title, or error message if update conflicts exist (overlap, insufficient travel time) or appointment not found.
+    """
     logger.info(f"🔧 TOOL CALLED: update_task(task_id={task_id}, updates={{title={title}, date={date}, time={time}}})")
     try:
         conn = get_db_connection()
@@ -313,6 +343,9 @@ def get_previous_task(reference_time: str) -> str:
     
     Args:
         reference_time: Time in YYYY-MM-DD HH:MM format
+    
+    Returns:
+        Complete details of the previous appointment including ID, title, customer, time, and address. Returns "No previous appointment found" if none exists.
     """
     logger.info(f"🔧 TOOL CALLED: get_previous_task(reference_time='{reference_time}')")
     try:
@@ -347,6 +380,9 @@ def get_next_task(reference_time: str) -> str:
     
     Args:
         reference_time: Time in YYYY-MM-DD HH:MM format
+    
+    Returns:
+        Complete details of the next appointment including ID, title, customer, time, and address. Returns "No next appointment found" if none exists.
     """
     logger.info(f"🔧 TOOL CALLED: get_next_task(reference_time='{reference_time}')")
     try:
@@ -384,6 +420,9 @@ def find_similar_appointments(customer_name: str, search_description: str) -> st
     Args:
         customer_name: Customer's full name
         search_description: Description of what you're looking for (can include service type, location, issue, etc.)
+    
+    Returns:
+        List of up to 5 similar past appointments with ID, title, address, description, and date. Returns "No similar past appointments found" if none match.
     """
     logger.info(f"🔧 TOOL CALLED: find_similar_appointments(customer='{customer_name}')")
     try:
@@ -413,6 +452,9 @@ def search_conversation_history(search_query: str) -> str:
     
     Args:
         search_query: What to search for in past conversations (topics, questions, appointments discussed, etc.)
+    
+    Returns:
+        List of up to 5 relevant past conversations with user messages, assistant responses, and timestamps. Returns "No relevant past conversations found" if none match.
     """
     logger.info(f"🔧 TOOL CALLED: search_conversation_history(query='{search_query}')")
     try:
