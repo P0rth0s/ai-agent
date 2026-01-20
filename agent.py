@@ -30,7 +30,7 @@ from sql_db import (
     delete_appointment_by_id,
     update_appointment_fields
 )
-from maps import check_travel_time
+from maps import check_travel_time, validate_travel_time_from_previous, validate_travel_time_to_next
 from weaviate_db import (
     find_related_appointments,
     store_appointment_in_vector_db,
@@ -101,33 +101,19 @@ def add_task(title: str, date: str, start_time: str, description: str, customer_
         
         # Check travel time from previous appointment
         previous_apt = get_previous_appointment(cur, start_dt)
-        
-        if previous_apt and previous_apt['address']:
-            travel_minutes = check_travel_time(previous_apt['address'], address)
-            if travel_minutes is not None:
-                time_gap = (start_dt - previous_apt['estimated_end_time']).total_seconds() / 60
-                if time_gap < travel_minutes:
-                    cur.close()
-                    conn.close()
-                    return {
-                        "success": False,
-                        "error": f"Not enough travel time from previous appointment '{previous_apt['appointment_title']}' (ID: {previous_apt['id']}). Need {travel_minutes} minutes but only {int(time_gap)} minutes available. Consider scheduling at {(previous_apt['estimated_end_time'] + timedelta(minutes=travel_minutes)).strftime('%H:%M')} or later."
-                    }
+        travel_error = validate_travel_time_from_previous(previous_apt, start_dt, address)
+        if travel_error:
+            cur.close()
+            conn.close()
+            return {"success": False, **travel_error}
         
         # Check travel time to next appointment
         next_apt = get_next_appointment(cur, end_dt)
-        
-        if next_apt and next_apt['address']:
-            travel_minutes = check_travel_time(address, next_apt['address'])
-            if travel_minutes is not None:
-                time_gap = (next_apt['start_time'] - end_dt).total_seconds() / 60
-                if time_gap < travel_minutes:
-                    cur.close()
-                    conn.close()
-                    return {
-                        "success": False,
-                        "error": f"Not enough travel time to next appointment '{next_apt['appointment_title']}' (ID: {next_apt['id']}). Need {travel_minutes} minutes but only {int(time_gap)} minutes available. Consider scheduling earlier or adjusting the end time."
-                    }
+        travel_error = validate_travel_time_to_next(next_apt, end_dt, address)
+        if travel_error:
+            cur.close()
+            conn.close()
+            return {"success": False, **travel_error}
         
         appointment_id = insert_appointment(cur, customer_name, address, title, description, start_dt, end_dt)
         conn.commit()
@@ -316,33 +302,19 @@ def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] =
             
             # Check travel time from previous appointment
             previous_apt = get_previous_appointment(cur, new_start, exclude_id=task_id)
-            
-            if previous_apt and previous_apt['address'] and appointment_address:
-                travel_minutes = check_travel_time(previous_apt['address'], appointment_address)
-                if travel_minutes is not None:
-                    time_gap = (new_start - previous_apt['estimated_end_time']).total_seconds() / 60
-                    if time_gap < travel_minutes:
-                        cur.close()
-                        conn.close()
-                        return {
-                            "success": False,
-                            "error": f"Not enough travel time from previous appointment '{previous_apt['appointment_title']}' (ID: {previous_apt['id']}). Need {travel_minutes} minutes but only {int(time_gap)} minutes available."
-                        }
+            travel_error = validate_travel_time_from_previous(previous_apt, new_start, appointment_address)
+            if travel_error:
+                cur.close()
+                conn.close()
+                return {"success": False, **travel_error}
             
             # Check travel time to next appointment
             next_apt = get_next_appointment(cur, new_end, exclude_id=task_id)
-            
-            if next_apt and next_apt['address'] and appointment_address:
-                travel_minutes = check_travel_time(appointment_address, next_apt['address'])
-                if travel_minutes is not None:
-                    time_gap = (next_apt['start_time'] - new_end).total_seconds() / 60
-                    if time_gap < travel_minutes:
-                        cur.close()
-                        conn.close()
-                        return {
-                            "success": False,
-                            "error": f"Not enough travel time to next appointment '{next_apt['appointment_title']}' (ID: {next_apt['id']}). Need {travel_minutes} minutes but only {int(time_gap)} minutes available."
-                        }
+            travel_error = validate_travel_time_to_next(next_apt, new_end, appointment_address)
+            if travel_error:
+                cur.close()
+                conn.close()
+                return {"success": False, **travel_error}
             
             updates.append("start_time = %s")
             params.append(new_start)
@@ -352,33 +324,23 @@ def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] =
             # If only address is changing (not time), check travel time constraints with current times
             # Check travel time from previous appointment
             previous_apt = get_previous_appointment(cur, appointment['start_time'], exclude_id=task_id)
-            
-            if previous_apt and previous_apt['address']:
-                travel_minutes = check_travel_time(previous_apt['address'], address)
-                if travel_minutes is not None:
-                    time_gap = (appointment['start_time'] - previous_apt['estimated_end_time']).total_seconds() / 60
-                    if time_gap < travel_minutes:
-                        cur.close()
-                        conn.close()
-                        return {
-                            "success": False,
-                            "error": f"Changing address would require {travel_minutes} minutes travel time from previous appointment '{previous_apt['appointment_title']}' (ID: {previous_apt['id']}), but only {int(time_gap)} minutes available."
-                        }
+            travel_error = validate_travel_time_from_previous(previous_apt, appointment['start_time'], address)
+            if travel_error:
+                # Adjust error message for address change context
+                travel_error['error'] = travel_error['error'].replace('Not enough travel time', 'Changing address would require')
+                cur.close()
+                conn.close()
+                return {"success": False, **travel_error}
             
             # Check travel time to next appointment
             next_apt = get_next_appointment(cur, appointment['estimated_end_time'], exclude_id=task_id)
-            
-            if next_apt and next_apt['address']:
-                travel_minutes = check_travel_time(address, next_apt['address'])
-                if travel_minutes is not None:
-                    time_gap = (next_apt['start_time'] - appointment['estimated_end_time']).total_seconds() / 60
-                    if time_gap < travel_minutes:
-                        cur.close()
-                        conn.close()
-                        return {
-                            "success": False,
-                            "error": f"Changing address would require {travel_minutes} minutes travel time to next appointment '{next_apt['appointment_title']}' (ID: {next_apt['id']}), but only {int(time_gap)} minutes available."
-                        }
+            travel_error = validate_travel_time_to_next(next_apt, appointment['estimated_end_time'], address)
+            if travel_error:
+                # Adjust error message for address change context
+                travel_error['error'] = travel_error['error'].replace('Not enough travel time', 'Changing address would require')
+                cur.close()
+                conn.close()
+                return {"success": False, **travel_error}
         
         if not updates:
             cur.close()
