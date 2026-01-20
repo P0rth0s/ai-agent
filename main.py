@@ -73,13 +73,21 @@ def main():
                     logger.info(f"💬 User input: {user_input}")
                     
                     # Get relevant conversation context from vector DB
-                    context = get_conversation_context(user_input, max_conversations=3)
+                    context = get_conversation_context(user_input, max_conversations=10)
+                    
+                    # Build messages with context if available
+                    messages = []
                     if context:
                         logger.info(f"📚 Found relevant past conversations")
+                        # Add context as a system message
+                        context_message = f"Relevant past conversations:\n{context}"
+                        messages.append(("system", context_message))
+                    
+                    messages.append(("user", user_input))
                     
                     # Invoke agent with memory using thread_id
                     response = agent.invoke(
-                        {"messages": [("user", user_input)]},
+                        {"messages": messages},
                         config={"configurable": {"thread_id": thread_id}}
                     )
                     

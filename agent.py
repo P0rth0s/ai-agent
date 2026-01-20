@@ -1,6 +1,6 @@
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Dict, List, Any
 import logging
 from psycopg2.extras import RealDictCursor
 
@@ -44,7 +44,7 @@ load_dotenv()
 
 # Calendar Tools
 @tool
-def add_task(title: str, date: str, start_time: str, description: str, customer_name: str, address: str, estimated_end_time: Optional[str] = None) -> str:
+def add_task(title: str, date: str, start_time: str, description: str, customer_name: str, address: str, estimated_end_time: Optional[str] = None) -> Dict[str, Any]:
     """Add an appointment to the calendar. All fields are required except estimated_end_time.
     
     Args:
@@ -57,7 +57,14 @@ def add_task(title: str, date: str, start_time: str, description: str, customer_
         estimated_end_time: Estimated end time in HH:MM format (optional, defaults to 1 hour after start)
     
     Returns:
-        Success message with appointment ID and any related past appointments found, or error message if scheduling conflicts exist (overlap, insufficient travel time).
+        Dictionary with:
+        - success (bool): True if appointment created, False if error
+        - appointment_id (int): ID of created appointment (only if success=True)
+        - title (str): Title of the appointment (only if success=True)
+        - date (str): Date of appointment (only if success=True)
+        - time (str): Start time of appointment (only if success=True)
+        - error (str): Error message (only if success=False)
+        - related_appointments (list): List of related past appointments with fields: appointment_id, title, address, description (only if success=True and related found)
     """
     logger.info(f"🔧 TOOL CALLED: add_task(title='{title}', date='{date}', start_time='{start_time}', customer='{customer_name}', estimated_end='{estimated_end_time}')")
     try:
@@ -87,7 +94,10 @@ def add_task(title: str, date: str, start_time: str, description: str, customer_
         if overlapping:
             cur.close()
             conn.close()
-            return f"Error: This appointment overlaps with existing appointment '{overlapping['appointment_title']}' (ID: {overlapping['id']}) scheduled from {overlapping['start_time'].strftime('%H:%M')} to {overlapping['estimated_end_time'].strftime('%H:%M')}. Please choose a different time."
+            return {
+                "success": False,
+                "error": f"This appointment overlaps with existing appointment '{overlapping['appointment_title']}' (ID: {overlapping['id']}) scheduled from {overlapping['start_time'].strftime('%H:%M')} to {overlapping['estimated_end_time'].strftime('%H:%M')}. Please choose a different time."
+            }
         
         # Check travel time from previous appointment
         previous_apt = get_previous_appointment(cur, start_dt)
@@ -99,7 +109,10 @@ def add_task(title: str, date: str, start_time: str, description: str, customer_
                 if time_gap < travel_minutes:
                     cur.close()
                     conn.close()
-                    return f"Error: Not enough travel time from previous appointment '{previous_apt['appointment_title']}' (ID: {previous_apt['id']}). Need {travel_minutes} minutes but only {int(time_gap)} minutes available. Consider scheduling at {(previous_apt['estimated_end_time'] + timedelta(minutes=travel_minutes)).strftime('%H:%M')} or later."
+                    return {
+                        "success": False,
+                        "error": f"Not enough travel time from previous appointment '{previous_apt['appointment_title']}' (ID: {previous_apt['id']}). Need {travel_minutes} minutes but only {int(time_gap)} minutes available. Consider scheduling at {(previous_apt['estimated_end_time'] + timedelta(minutes=travel_minutes)).strftime('%H:%M')} or later."
+                    }
         
         # Check travel time to next appointment
         next_apt = get_next_appointment(cur, end_dt)
@@ -111,7 +124,10 @@ def add_task(title: str, date: str, start_time: str, description: str, customer_
                 if time_gap < travel_minutes:
                     cur.close()
                     conn.close()
-                    return f"Error: Not enough travel time to next appointment '{next_apt['appointment_title']}' (ID: {next_apt['id']}). Need {travel_minutes} minutes but only {int(time_gap)} minutes available. Consider scheduling earlier or adjusting the end time."
+                    return {
+                        "success": False,
+                        "error": f"Not enough travel time to next appointment '{next_apt['appointment_title']}' (ID: {next_apt['id']}). Need {travel_minutes} minutes but only {int(time_gap)} minutes available. Consider scheduling earlier or adjusting the end time."
+                    }
         
         appointment_id = insert_appointment(cur, customer_name, address, title, description, start_dt, end_dt)
         conn.commit()
@@ -121,21 +137,37 @@ def add_task(title: str, date: str, start_time: str, description: str, customer_
         # Store appointment in vector database for future similarity searches
         store_appointment_in_vector_db(appointment_id, customer_name, title, description, address, start_dt)
         
-        return f"✓ Appointment '{title}' scheduled for {date} at {start_time} (ID: {appointment_id}){related_info}"
+        result = {
+            "success": True,
+            "appointment_id": appointment_id,
+            "title": title,
+            "date": date,
+            "time": start_time
+        }
+        
+        if related_appointments:
+            result["related_appointments"] = related_appointments
+        
+        return result
     except Exception as e:
         logger.error(f"❌ Error in add_task: {type(e).__name__}: {str(e)}")
         logger.exception("Full traceback:")
-        return f"Error: Failed to create appointment - {str(e)}"
+        return {"success": False, "error": f"Failed to create appointment - {str(e)}"}
 
 @tool
-def list_tasks(date: Optional[str] = None) -> str:
+def list_tasks(date: Optional[str] = None) -> Dict[str, Any]:
     """List all appointments with complete details including ID, title, customer, time, address, and notes.
     
     Args:
         date: Optional date filter in YYYY-MM-DD format. If not provided, returns ALL appointments.
     
     Returns:
-        Complete formatted list of all appointments with full details. Always present this information directly to the user without asking if they want to see more.
+        Dictionary with:
+        - success (bool): True if query succeeded, False if error
+        - appointments (list): List of appointment dictionaries, each with fields: id, appointment_title, customer_name, start_time, estimated_end_time, address, notes
+        - date_filter (str): The date filter used, if any
+        - count (int): Number of appointments returned
+        - error (str): Error message (only if success=False)
     """
     logger.info(f"🔧 TOOL CALLED: list_tasks(date={date})")
     try:
@@ -146,33 +178,47 @@ def list_tasks(date: Optional[str] = None) -> str:
         cur.close()
         conn.close()
         
-        if not appointments:
-            return "No appointments scheduled." if not date else f"No appointments scheduled for {date}."
-        
-        result = "📅 Scheduled Appointments:\n\n"
+        # Convert datetime objects to strings for JSON serialization
+        appointments_list = []
         for apt in appointments:
-            result += f"[{apt['id']}] {apt['appointment_title']} - {apt['customer_name']}\n"
-            result += f"    When: {apt['start_time'].strftime('%Y-%m-%d at %H:%M')} - {apt['estimated_end_time'].strftime('%H:%M')}\n"
-            if apt['address']:
-                result += f"    Where: {apt['address']}\n"
-            if apt['notes']:
-                result += f"    Notes: {apt['notes']}\n"
-            result += "\n"
+            appointments_list.append({
+                "id": apt['id'],
+                "appointment_title": apt['appointment_title'],
+                "customer_name": apt['customer_name'],
+                "start_time": apt['start_time'].strftime('%Y-%m-%d %H:%M'),
+                "estimated_end_time": apt['estimated_end_time'].strftime('%Y-%m-%d %H:%M'),
+                "address": apt['address'],
+                "notes": apt['notes']
+            })
+        
+        result = {
+            "success": True,
+            "appointments": appointments_list,
+            "count": len(appointments_list)
+        }
+        
+        if date:
+            result["date_filter"] = date
+        
         return result
     except Exception as e:
         logger.error(f"❌ Error in list_tasks: {type(e).__name__}: {str(e)}")
         logger.exception("Full traceback:")
-        return f"Error: Failed to list appointments - {str(e)}"
+        return {"success": False, "error": f"Failed to list appointments - {str(e)}"}
 
 @tool
-def delete_task(task_id: int) -> str:
+def delete_task(task_id: int) -> Dict[str, Any]:
     """Delete an appointment from the calendar by its ID.
     
     Args:
         task_id: The ID of the appointment to delete
     
     Returns:
-        Success message with the deleted appointment's title, or error if appointment not found.
+        Dictionary with:
+        - success (bool): True if deleted, False if error
+        - task_id (int): ID of the deleted appointment (only if success=True)
+        - title (str): Title of deleted appointment (only if success=True)
+        - error (str): Error message (only if success=False)
     """
     logger.info(f"🔧 TOOL CALLED: delete_task(task_id={task_id})")
     try:
@@ -184,22 +230,22 @@ def delete_task(task_id: int) -> str:
         if not appointment_title:
             cur.close()
             conn.close()
-            return f"Error: Appointment with ID {task_id} not found."
+            return {"success": False, "error": f"Appointment with ID {task_id} not found."}
         
         conn.commit()
         cur.close()
         conn.close()
         
-        return f"✓ Deleted appointment: {appointment_title} (ID: {task_id})"
+        return {"success": True, "task_id": task_id, "title": appointment_title}
     except Exception as e:
         logger.error(f"❌ Error in delete_task: {type(e).__name__}: {str(e)}")
         logger.exception("Full traceback:")
-        return f"Error: Failed to delete appointment - {str(e)}"
+        return {"success": False, "error": f"Failed to delete appointment - {str(e)}"}
 
 @tool
 def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] = None, 
                 time: Optional[str] = None, description: Optional[str] = None,
-                customer_name: Optional[str] = None, address: Optional[str] = None) -> str:
+                customer_name: Optional[str] = None, address: Optional[str] = None) -> Dict[str, Any]:
     """Update an appointment's details. Provide task_id and fields to update.
     
     Args:
@@ -212,7 +258,11 @@ def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] =
         address: New address (optional)
     
     Returns:
-        Success message with updated appointment title, or error message if update conflicts exist (overlap, insufficient travel time) or appointment not found.
+        Dictionary with:
+        - success (bool): True if updated, False if error
+        - task_id (int): ID of the updated appointment (only if success=True)
+        - title (str): Title of updated appointment (only if success=True)
+        - error (str): Error message (only if success=False)
     """
     logger.info(f"🔧 TOOL CALLED: update_task(task_id={task_id}, updates={{title={title}, date={date}, time={time}}})")
     try:
@@ -225,7 +275,7 @@ def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] =
         if not appointment:
             cur.close()
             conn.close()
-            return f"Error: Appointment with ID {task_id} not found."
+            return {"success": False, "error": f"Appointment with ID {task_id} not found."}
         
         # Build update query dynamically
         updates = []
@@ -256,7 +306,10 @@ def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] =
             if overlapping:
                 cur.close()
                 conn.close()
-                return f"Error: This time change would overlap with existing appointment '{overlapping['appointment_title']}' (ID: {overlapping['id']}) scheduled from {overlapping['start_time'].strftime('%H:%M')} to {overlapping['estimated_end_time'].strftime('%H:%M')}. Please choose a different time."
+                return {
+                    "success": False,
+                    "error": f"This time change would overlap with existing appointment '{overlapping['appointment_title']}' (ID: {overlapping['id']}) scheduled from {overlapping['start_time'].strftime('%H:%M')} to {overlapping['estimated_end_time'].strftime('%H:%M')}. Please choose a different time."
+                }
             
             # Check travel time constraints when time is changing
             appointment_address = address if address else appointment['address']
@@ -271,7 +324,10 @@ def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] =
                     if time_gap < travel_minutes:
                         cur.close()
                         conn.close()
-                        return f"Error: Not enough travel time from previous appointment '{previous_apt['appointment_title']}' (ID: {previous_apt['id']}). Need {travel_minutes} minutes but only {int(time_gap)} minutes available."
+                        return {
+                            "success": False,
+                            "error": f"Not enough travel time from previous appointment '{previous_apt['appointment_title']}' (ID: {previous_apt['id']}). Need {travel_minutes} minutes but only {int(time_gap)} minutes available."
+                        }
             
             # Check travel time to next appointment
             next_apt = get_next_appointment(cur, new_end, exclude_id=task_id)
@@ -283,7 +339,10 @@ def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] =
                     if time_gap < travel_minutes:
                         cur.close()
                         conn.close()
-                        return f"Error: Not enough travel time to next appointment '{next_apt['appointment_title']}' (ID: {next_apt['id']}). Need {travel_minutes} minutes but only {int(time_gap)} minutes available."
+                        return {
+                            "success": False,
+                            "error": f"Not enough travel time to next appointment '{next_apt['appointment_title']}' (ID: {next_apt['id']}). Need {travel_minutes} minutes but only {int(time_gap)} minutes available."
+                        }
             
             updates.append("start_time = %s")
             params.append(new_start)
@@ -301,7 +360,10 @@ def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] =
                     if time_gap < travel_minutes:
                         cur.close()
                         conn.close()
-                        return f"Error: Changing address would require {travel_minutes} minutes travel time from previous appointment '{previous_apt['appointment_title']}' (ID: {previous_apt['id']}), but only {int(time_gap)} minutes available."
+                        return {
+                            "success": False,
+                            "error": f"Changing address would require {travel_minutes} minutes travel time from previous appointment '{previous_apt['appointment_title']}' (ID: {previous_apt['id']}), but only {int(time_gap)} minutes available."
+                        }
             
             # Check travel time to next appointment
             next_apt = get_next_appointment(cur, appointment['estimated_end_time'], exclude_id=task_id)
@@ -313,39 +375,45 @@ def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] =
                     if time_gap < travel_minutes:
                         cur.close()
                         conn.close()
-                        return f"Error: Changing address would require {travel_minutes} minutes travel time to next appointment '{next_apt['appointment_title']}' (ID: {next_apt['id']}), but only {int(time_gap)} minutes available."
+                        return {
+                            "success": False,
+                            "error": f"Changing address would require {travel_minutes} minutes travel time to next appointment '{next_apt['appointment_title']}' (ID: {next_apt['id']}), but only {int(time_gap)} minutes available."
+                        }
         
         if not updates:
             cur.close()
             conn.close()
-            return "No updates provided."
+            return {"success": False, "error": "No updates provided."}
         
         result_title = update_appointment_fields(cur, task_id, updates, params)
         
         if not result_title:
             cur.close()
             conn.close()
-            return f"Error: Failed to update appointment {task_id}"
+            return {"success": False, "error": f"Failed to update appointment {task_id}"}
         
         conn.commit()
         cur.close()
         conn.close()
         
-        return f"✓ Updated appointment: {result_title}"
+        return {"success": True, "task_id": task_id, "title": result_title}
     except Exception as e:
         logger.error(f"❌ Error in update_task: {type(e).__name__}: {str(e)}")
         logger.exception("Full traceback:")
-        return f"Error: Failed to update appointment - {str(e)}"
+        return {"success": False, "error": f"Failed to update appointment - {str(e)}"}
 
 @tool
-def get_previous_task(reference_time: str) -> str:
+def get_previous_task(reference_time: str) -> Dict[str, Any]:
     """Get the appointment scheduled immediately before a given time.
     
     Args:
         reference_time: Time in YYYY-MM-DD HH:MM format
     
     Returns:
-        Complete details of the previous appointment including ID, title, customer, time, and address. Returns "No previous appointment found" if none exists.
+        Dictionary with:
+        - success (bool): True if query succeeded, False if error
+        - appointment (dict): Appointment data with fields: id, appointment_title, customer_name, start_time, estimated_end_time, address, notes (only if found)
+        - error (str): Error message (only if success=False)
     """
     logger.info(f"🔧 TOOL CALLED: get_previous_task(reference_time='{reference_time}')")
     try:
@@ -359,30 +427,37 @@ def get_previous_task(reference_time: str) -> str:
         conn.close()
         
         if not appointment:
-            return "No previous appointment found."
+            return {"success": True, "appointment": None}
         
-        result = f"Previous Appointment:\n"
-        result += f"[{appointment['id']}] {appointment['appointment_title']} - {appointment['customer_name']}\n"
-        result += f"Time: {appointment['start_time'].strftime('%Y-%m-%d at %H:%M')} - {appointment['estimated_end_time'].strftime('%H:%M')}\n"
-        result += f"Address: {appointment['address']}\n"
-        if appointment['notes']:
-            result += f"Notes: {appointment['notes']}\n"
-        
-        return result
+        return {
+            "success": True,
+            "appointment": {
+                "id": appointment['id'],
+                "appointment_title": appointment['appointment_title'],
+                "customer_name": appointment['customer_name'],
+                "start_time": appointment['start_time'].strftime('%Y-%m-%d %H:%M'),
+                "estimated_end_time": appointment['estimated_end_time'].strftime('%Y-%m-%d %H:%M'),
+                "address": appointment['address'],
+                "notes": appointment['notes']
+            }
+        }
     except Exception as e:
         logger.error(f"❌ Error in get_previous_task: {type(e).__name__}: {str(e)}")
         logger.exception("Full traceback:")
-        return f"Error: Failed to get previous task - {str(e)}"
+        return {"success": False, "error": f"Failed to get previous task - {str(e)}"}
 
 @tool
-def get_next_task(reference_time: str) -> str:
+def get_next_task(reference_time: str) -> Dict[str, Any]:
     """Get the appointment scheduled immediately after a given time.
     
     Args:
         reference_time: Time in YYYY-MM-DD HH:MM format
     
     Returns:
-        Complete details of the next appointment including ID, title, customer, time, and address. Returns "No next appointment found" if none exists.
+        Dictionary with:
+        - success (bool): True if query succeeded, False if error
+        - appointment (dict): Appointment data with fields: id, appointment_title, customer_name, start_time, estimated_end_time, address, notes (only if found)
+        - error (str): Error message (only if success=False)
     """
     logger.info(f"🔧 TOOL CALLED: get_next_task(reference_time='{reference_time}')")
     try:
@@ -396,23 +471,27 @@ def get_next_task(reference_time: str) -> str:
         conn.close()
         
         if not appointment:
-            return "No next appointment found."
+            return {"success": True, "appointment": None}
         
-        result = f"Next Appointment:\n"
-        result += f"[{appointment['id']}] {appointment['appointment_title']} - {appointment['customer_name']}\n"
-        result += f"Time: {appointment['start_time'].strftime('%Y-%m-%d at %H:%M')} - {appointment['estimated_end_time'].strftime('%H:%M')}\n"
-        result += f"Address: {appointment['address']}\n"
-        if appointment['notes']:
-            result += f"Notes: {appointment['notes']}\n"
-        
-        return result
+        return {
+            "success": True,
+            "appointment": {
+                "id": appointment['id'],
+                "appointment_title": appointment['appointment_title'],
+                "customer_name": appointment['customer_name'],
+                "start_time": appointment['start_time'].strftime('%Y-%m-%d %H:%M'),
+                "estimated_end_time": appointment['estimated_end_time'].strftime('%Y-%m-%d %H:%M'),
+                "address": appointment['address'],
+                "notes": appointment['notes']
+            }
+        }
     except Exception as e:
         logger.error(f"❌ Error in get_next_task: {type(e).__name__}: {str(e)}")
         logger.exception("Full traceback:")
-        return f"Error: Failed to get next task - {str(e)}"
+        return {"success": False, "error": f"Failed to get next task - {str(e)}"}
 
 @tool
-def find_similar_appointments(customer_name: str, search_description: str) -> str:
+def find_similar_appointments(customer_name: str, search_description: str) -> Dict[str, Any]:
     """Find past appointments similar to a description for a specific customer.
     
     Use this to check if a new appointment might be related to previous work.
@@ -422,30 +501,30 @@ def find_similar_appointments(customer_name: str, search_description: str) -> st
         search_description: Description of what you're looking for (can include service type, location, issue, etc.)
     
     Returns:
-        List of up to 5 similar past appointments with ID, title, address, description, and date. Returns "No similar past appointments found" if none match.
+        Dictionary with:
+        - success (bool): True if query succeeded, False if error
+        - customer_name (str): The customer name searched
+        - appointments (list): List of up to 5 similar appointment dictionaries with fields: appointment_id, title, address, description, start_time
+        - count (int): Number of appointments found
+        - error (str): Error message (only if success=False)
     """
     logger.info(f"🔧 TOOL CALLED: find_similar_appointments(customer='{customer_name}')")
     try:
         # Use the search description as the query
         related = find_related_appointments(customer_name, search_description, search_description, "", limit=5)
         
-        if not related:
-            return f"No similar past appointments found for {customer_name}."
-        
-        result = f"📋 Similar past appointments for {customer_name}:\n\n"
-        for apt in related:
-            result += f"[{apt['appointment_id']}] {apt['title']}\n"
-            result += f"    Address: {apt['address']}\n"
-            result += f"    Description: {apt['description'][:150]}...\n" if len(apt['description']) > 150 else f"    Description: {apt['description']}\n"
-            result += f"    Date: {apt['start_time']}\n\n"
-        
-        return result
+        return {
+            "success": True,
+            "customer_name": customer_name,
+            "appointments": related if related else [],
+            "count": len(related) if related else 0
+        }
     except Exception as e:
         logger.error(f"❌ Error in find_similar_appointments: {e}")
-        return f"Error: Failed to find similar appointments - {str(e)}"
+        return {"success": False, "error": f"Failed to find similar appointments - {str(e)}"}
 
 @tool
-def search_conversation_history(search_query: str) -> str:
+def search_conversation_history(search_query: str) -> Dict[str, Any]:
     """Search through past conversation history to find relevant discussions.
     
     Use this when the user asks about previous conversations or when you need context from past discussions.
@@ -454,26 +533,24 @@ def search_conversation_history(search_query: str) -> str:
         search_query: What to search for in past conversations (topics, questions, appointments discussed, etc.)
     
     Returns:
-        List of up to 5 relevant past conversations with user messages, assistant responses, and timestamps. Returns "No relevant past conversations found" if none match.
+        Dictionary with:
+        - success (bool): True if query succeeded, False if error
+        - conversations (list): List of up to 5 relevant conversation dictionaries with fields: user_message, assistant_response, timestamp
+        - count (int): Number of conversations found
+        - error (str): Error message (only if success=False)
     """
     logger.info(f"🔧 TOOL CALLED: search_conversation_history(query='{search_query}')")
     try:
         similar = find_similar_conversations(search_query, limit=5)
         
-        if not similar:
-            return "No relevant past conversations found."
-        
-        result = "📚 Relevant past conversations:\n\n"
-        for i, conv in enumerate(similar, 1):
-            result += f"{i}. Previous discussion:\n"
-            result += f"   User: {conv['user_message'][:200]}...\n" if len(conv['user_message']) > 200 else f"   User: {conv['user_message']}\n"
-            result += f"   Assistant: {conv['assistant_response'][:200]}...\n" if len(conv['assistant_response']) > 200 else f"   Assistant: {conv['assistant_response']}\n"
-            result += f"   Time: {conv['timestamp']}\n\n"
-        
-        return result
+        return {
+            "success": True,
+            "conversations": similar if similar else [],
+            "count": len(similar) if similar else 0
+        }
     except Exception as e:
         logger.error(f"❌ Error in search_conversation_history: {e}")
-        return f"Error: Failed to search conversation history - {str(e)}"
+        return {"success": False, "error": f"Failed to search conversation history - {str(e)}"}
 
 # Setup the AI agent with memory
 def create_calendar_agent():
@@ -492,7 +569,23 @@ def create_calendar_agent():
     - Check what's scheduled for today or specific dates
     - Find related past appointments using semantic search
     - Search through past conversation history
+    - Search for similar past appointments
     
+    Be conversational and helpful. When users ask to schedule something, extract the relevant details
+    (title, date, time, description) and use the appropriate tool.
+
+    Always confirm actions and provide clear feedback. Remember previous messages in our conversation.
+
+    Today's date is {datetime.now().strftime('%Y-%m-%d')} ({datetime.now().strftime('%A, %B %d, %Y')}).
+
+    TOOL RESPONSES:
+    - All tools return structured dictionary data, NOT user-friendly text
+    - You MUST format tool responses into natural, conversational messages for users
+    - When listing appointments, format them clearly with IDs in brackets like: [1] Meeting - John Doe
+    - When showing multiple items, use appropriate formatting (bullets, numbers, line breaks)
+    - Extract and present relevant information from the structured data
+    - For operations like "delete all appointments", you can call list_tasks to get all appointment IDs, then call delete_task multiple times
+
     MEMORY CAPABILITIES:
     - SHORT-TERM: You remember the current conversation session through your built-in memory
     - LONG-TERM: All conversations are stored in a vector database and can be searched semantically
@@ -502,15 +595,7 @@ def create_calendar_agent():
     
     IMPORTANT: When scheduling a new appointment, the system will automatically check for related past appointments.
     If related appointments are found, inform the user about them as they might be relevant (follow-up work, recurring issues, etc.).
-    
-    You can also manually search for similar past appointments using find_similar_appointments if the user asks about history.
-    
-    Be conversational and helpful. When users ask to schedule something, extract the relevant details
-    (title, date, time, description) and use the appropriate tool.
-
-    Always confirm actions and provide clear feedback. Remember previous messages in our conversation.
-
-    Today's date is {datetime.now().strftime('%Y-%m-%d')} ({datetime.now().strftime('%A, %B %d, %Y')}).
+    If the appointments are on the same day suggest combining them into a single visit.
     
     IMPORTANT DATE HANDLING:
     - When users say "today", use: {datetime.now().strftime('%Y-%m-%d')}

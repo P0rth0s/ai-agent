@@ -44,3 +44,8 @@ As i worked on this project certain things began to jump out at me that id like 
 5. Copy .env.example to .env
 6. Docker compose up in a seperate tab
 7. python main.py
+
+
+### Continued changes
+- Fixed passing in past message context when a user sends a message
+- Updated tools to return dictionaries which the LLM can understand better than strings
