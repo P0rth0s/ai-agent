@@ -80,8 +80,8 @@ def main():
                     if context:
                         logger.info(f"📚 Found relevant past conversations")
                         # Add context as a system message
-                        context_message = f"Relevant past conversations:\n{context}"
-                        messages.append(("system", context_message))
+                        # context_message = f"Relevant past conversations:\n{context}"
+                        # messages.append(("system", context_message))
                     
                     messages.append(("user", user_input))
                     

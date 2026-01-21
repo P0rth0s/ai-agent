@@ -124,7 +124,7 @@ def store_appointment_in_vector_db(appointment_id: int, customer_name: str, titl
     except Exception as e:
         logger.error(f"❌ Error storing appointment in vector DB: {e}")
 
-def find_related_appointments(customer_name: str, title: str, description: str, address: str, limit: int = 3) -> list:
+def find_related_appointments(customer_name: str, title: str, description: str, address: str, limit: int = 3, distance_threshold: float = 0.3) -> list:
     """Find semantically similar past appointments for a customer
     
     Args:
@@ -133,42 +133,52 @@ def find_related_appointments(customer_name: str, title: str, description: str, 
         description: New appointment description
         address: New appointment address
         limit: Maximum number of related appointments to return
+        distance_threshold: Maximum vector distance (0-1, lower=more similar). Default 0.3 filters generic matches.
     
     Returns:
-        List of related appointments with similarity scores
+        List of related appointments with similarity scores, sorted by relevance
     """
     try:
         client = get_weaviate_client()
         if not client:
             return []
         
-        # Create search query combining all relevant information
-        search_query = f"Title: {title}. Description: {description}. Address: {address}"
+        # Create enhanced search query focusing on work type and issues
+        # Emphasize the description as it contains the core work details
+        search_query = f"{description} {title} {address}"
         
         appointment_collection = client.collections.get("AppointmentHistory")
         
-        # Search for similar appointments for this customer
+        # Search for similar appointments with distance filter
+        # near_text returns certainty score (1 - distance), so convert threshold
         response = appointment_collection.query.near_text(
             query=search_query,
-            limit=limit * 2  # Get more results to filter by customer
+            limit=limit * 3,  # Get more results to filter by customer and distance
+            distance=distance_threshold  # Filter out loosely related matches
         )
         
-        # Filter by customer and format results
+        # Filter by customer, apply distance threshold, and format results
         related = []
         for obj in response.objects:
             if obj.properties["customer_name"].lower() == customer_name.lower():
-                related.append({
-                    "appointment_id": obj.properties["appointment_id"],
-                    "title": obj.properties["title"],
-                    "description": obj.properties["description"],
-                    "address": obj.properties["address"],
-                    "start_time": obj.properties["start_time"],
-                    "similarity_score": obj.metadata.score if hasattr(obj.metadata, 'score') else None
-                })
-                if len(related) >= limit:
-                    break
+                # Calculate distance (lower is more similar)
+                distance = obj.metadata.distance if hasattr(obj.metadata, 'distance') else None
+                
+                # Only include if distance is below threshold (more similar)
+                if distance is None or distance <= distance_threshold:
+                    related.append({
+                        "appointment_id": obj.properties["appointment_id"],
+                        "title": obj.properties["title"],
+                        "description": obj.properties["description"],
+                        "address": obj.properties["address"],
+                        "start_time": obj.properties["start_time"],
+                        "distance": distance,  # Lower is more similar
+                        "similarity_score": (1 - distance) if distance is not None else None  # Convert to 0-1 score
+                    })
         
-        return related
+        # Sort by distance (most similar first) and return top results
+        related.sort(key=lambda x: x.get('distance', 1.0))
+        return related[:limit]
     except Exception as e:
         logger.error(f"❌ Error finding related appointments: {e}")
         return []

@@ -12,6 +12,7 @@ def find_similar_appointments(customer_name: str, search_description: str) -> Di
     """Find past appointments similar to a description for a specific customer.
     
     Use this to check if a new appointment might be related to previous work.
+    Focuses on finding semantically similar work (e.g., 'water leak' matches 'toilet repair', 'wifi issue' matches 'electrical problem').
     
     Args:
         customer_name: Customer's full name
@@ -21,14 +22,14 @@ def find_similar_appointments(customer_name: str, search_description: str) -> Di
         Dictionary with:
         - success (bool): True if query succeeded, False if error
         - customer_name (str): The customer name searched
-        - appointments (list): List of up to 5 similar appointment dictionaries with fields: appointment_id, title, address, description, start_time
+        - appointments (list): List of up to 3 highly similar appointment dictionaries with fields: appointment_id, title, address, description, start_time, similarity_score
         - count (int): Number of appointments found
         - error (str): Error message (only if success=False)
     """
     logger.info(f"🔧 TOOL CALLED: find_similar_appointments(customer='{customer_name}')")
     try:
-        # Use the search description as the query
-        related = find_related_appointments(customer_name, search_description, search_description, "", limit=5)
+        # Use stricter distance threshold (0.25) to find closely related work
+        related = find_related_appointments(customer_name, search_description, search_description, "", limit=3, distance_threshold=0.25)
         
         return {
             "success": True,
