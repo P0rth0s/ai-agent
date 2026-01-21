@@ -5,8 +5,8 @@ import time
 import logging
 
 # Import the agent creator and tools from agent.py
-from agent import create_calendar_agent
-from weaviate_db import close_weaviate_client, store_conversation, get_conversation_context
+from calendar_agent.agent import create_calendar_agent
+from calendar_agent.weaviate_db import close_weaviate_client, store_conversation, get_conversation_context
 import atexit
 
 # Load environment variables

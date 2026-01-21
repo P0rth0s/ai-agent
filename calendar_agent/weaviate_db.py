@@ -176,7 +176,7 @@ def find_related_appointments(customer_name: str, title: str, description: str, 
 def sync_existing_appointments_to_vector_db():
     """One-time sync of existing appointments to vector database"""
     try:
-        from sql_db import get_db_connection
+        from calendar_agent.sql_db import get_db_connection
         
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
