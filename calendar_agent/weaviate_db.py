@@ -124,7 +124,7 @@ def store_appointment_in_vector_db(appointment_id: int, customer_name: str, titl
     except Exception as e:
         logger.error(f"❌ Error storing appointment in vector DB: {e}")
 
-def find_related_appointments(customer_name: str, title: str, description: str, address: str, limit: int = 3, distance_threshold: float = 0.3) -> list:
+def find_related_appointments(customer_name: str, title: str, description: str, address: str, limit: int = 3, distance_threshold: float = 0.8) -> list:
     """Find semantically similar past appointments for a customer
     
     Args:
@@ -133,7 +133,7 @@ def find_related_appointments(customer_name: str, title: str, description: str, 
         description: New appointment description
         address: New appointment address
         limit: Maximum number of related appointments to return
-        distance_threshold: Maximum vector distance (0-1, lower=more similar). Default 0.3 filters generic matches.
+        distance_threshold: Maximum vector distance (0-1, lower=more similar). Default 0.8 filters generic matches.
     
     Returns:
         List of related appointments with similarity scores, sorted by relevance
@@ -145,7 +145,7 @@ def find_related_appointments(customer_name: str, title: str, description: str, 
         
         # Create enhanced search query focusing on work type and issues
         # Emphasize the description as it contains the core work details
-        search_query = f"{description} {title} {address}"
+        search_query = f"{title} {description} {address}"
         
         appointment_collection = client.collections.get("AppointmentHistory")
         
@@ -177,7 +177,8 @@ def find_related_appointments(customer_name: str, title: str, description: str, 
                     })
         
         # Sort by distance (most similar first) and return top results
-        related.sort(key=lambda x: x.get('distance', 1.0))
+        # Handle None values by treating them as high distance (less similar)
+        related.sort(key=lambda x: x['distance'] if x['distance'] is not None else 1.0)
         return related[:limit]
     except Exception as e:
         logger.error(f"❌ Error finding related appointments: {e}")

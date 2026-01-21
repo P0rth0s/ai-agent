@@ -235,6 +235,7 @@ def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] =
         - task_id (int): ID of the updated appointment (only if success=True)
         - title (str): Title of updated appointment (only if success=True)
         - error (str): Error message (only if success=False)
+        - related_appointments (list): List of related past appointments with fields: appointment_id, title, address, description, similarity_score (only if success=True and related found)
     """
     logger.info(f"🔧 TOOL CALLED: update_task(task_id={task_id}, updates={{title={title}, date={date}, time={time}}})")
     try:
@@ -372,7 +373,21 @@ def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] =
         cur.close()
         conn.close()
         
-        return {"success": True, "task_id": task_id, "title": result_title}
+        # Check for related past appointments after successful update
+        # Use updated values or fall back to current appointment data
+        updated_customer = customer_name if customer_name else appointment['customer_name']
+        updated_title = title if title else appointment['appointment_title']
+        updated_description = description if description else appointment['notes']
+        updated_address = address if address else appointment['address']
+        
+        related_appointments = find_related_appointments(updated_customer, updated_title, updated_description, updated_address)
+        
+        result = {"success": True, "task_id": task_id, "title": result_title}
+        
+        if related_appointments:
+            result["related_appointments"] = related_appointments
+        
+        return result
     except Exception as e:
         logger.error(f"❌ Error in update_task: {type(e).__name__}: {str(e)}")
         logger.exception("Full traceback:")
