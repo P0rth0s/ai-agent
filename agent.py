@@ -77,6 +77,32 @@ def add_task(title: str, date: str, start_time: str, description: str, customer_
             # Default to 1 hour duration
             end_dt = start_dt + timedelta(hours=1)
         
+        # Validate: No weekends (Saturday=5, Sunday=6)
+        if start_dt.weekday() in [5, 6]:
+            day_name = start_dt.strftime('%A')
+            return {
+                "success": False,
+                "error": f"Cannot schedule appointments on weekends. {day_name} is not available. Please choose a weekday (Monday-Friday)."
+            }
+        
+        # Validate: Time range 08:00-18:00
+        start_hour = start_dt.hour + start_dt.minute / 60
+        end_hour = end_dt.hour + end_dt.minute / 60
+        if start_hour < 8 or end_hour > 18:
+            return {
+                "success": False,
+                "error": f"Appointments must be scheduled between 08:00 and 18:00. Requested time: {start_time} - {end_dt.strftime('%H:%M')} is outside business hours."
+            }
+        
+        # Validate: Within 2 hours of Bozeman, Montana (59715)
+        base_location = "Bozeman, MT 59715"
+        travel_minutes = check_travel_time(base_location, address)
+        if travel_minutes is not None and travel_minutes > 120:
+            return {
+                "success": False,
+                "error": f"Appointment location is {travel_minutes} minutes from Bozeman, MT. Service area is limited to locations within 2 hours (120 minutes) of Bozeman."
+            }
+        
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
         
@@ -287,6 +313,27 @@ def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] =
             duration = appointment['estimated_end_time'] - appointment['start_time']
             new_end = new_start + duration
             
+            # Validate: No weekends (Saturday=5, Sunday=6)
+            if new_start.weekday() in [5, 6]:
+                day_name = new_start.strftime('%A')
+                cur.close()
+                conn.close()
+                return {
+                    "success": False,
+                    "error": f"Cannot schedule appointments on weekends. {day_name} is not available. Please choose a weekday (Monday-Friday)."
+                }
+            
+            # Validate: Time range 08:00-18:00
+            start_hour = new_start.hour + new_start.minute / 60
+            end_hour = new_end.hour + new_end.minute / 60
+            if start_hour < 8 or end_hour > 18:
+                cur.close()
+                conn.close()
+                return {
+                    "success": False,
+                    "error": f"Appointments must be scheduled between 08:00 and 18:00. Requested time: {new_start.strftime('%H:%M')} - {new_end.strftime('%H:%M')} is outside business hours."
+                }
+            
             # Check for overlapping appointments (excluding current appointment)
             overlapping = check_appointment_overlap(cur, new_start, new_end, exclude_id=task_id)
             if overlapping:
@@ -299,6 +346,18 @@ def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] =
             
             # Check travel time constraints when time is changing
             appointment_address = address if address else appointment['address']
+            
+            # Validate: Within 2 hours of Bozeman, Montana (59715) if address is changing
+            if address:
+                base_location = "Bozeman, MT 59715"
+                travel_minutes_to_base = check_travel_time(base_location, address)
+                if travel_minutes_to_base is not None and travel_minutes_to_base > 120:
+                    cur.close()
+                    conn.close()
+                    return {
+                        "success": False,
+                        "error": f"Appointment location is {travel_minutes_to_base} minutes from Bozeman, MT. Service area is limited to locations within 2 hours (120 minutes) of Bozeman."
+                    }
             
             # Check travel time from previous appointment
             previous_apt = get_previous_appointment(cur, new_start, exclude_id=task_id)
@@ -322,6 +381,17 @@ def update_task(task_id: int, title: Optional[str] = None, date: Optional[str] =
             params.append(new_end)
         elif address:
             # If only address is changing (not time), check travel time constraints with current times
+            # Validate: Within 2 hours of Bozeman, Montana (59715)
+            base_location = "Bozeman, MT 59715"
+            travel_minutes = check_travel_time(base_location, address)
+            if travel_minutes is not None and travel_minutes > 120:
+                cur.close()
+                conn.close()
+                return {
+                    "success": False,
+                    "error": f"Appointment location is {travel_minutes} minutes from Bozeman, MT. Service area is limited to locations within 2 hours (120 minutes) of Bozeman."
+                }
+            
             # Check travel time from previous appointment
             previous_apt = get_previous_appointment(cur, appointment['start_time'], exclude_id=task_id)
             travel_error = validate_travel_time_from_previous(previous_apt, appointment['start_time'], address)
@@ -524,7 +594,7 @@ def create_calendar_agent():
              find_similar_appointments, search_conversation_history]
     
     # Create system prompt
-    system_message = f"""You are a helpful calendar assistant with both short-term and long-term memory. You can help users:
+    system_message = f"""You are a helpful calendar assistant for a handyman. You have both short-term and long-term memory. You can help users:
     - Schedule tasks and events
     - View their calendar
     - Update or delete tasks
@@ -555,10 +625,6 @@ def create_calendar_agent():
     - Use search_conversation_history tool when the user explicitly asks about past conversations
     - When scheduling appointments, the system automatically checks for related past work
     
-    IMPORTANT: When scheduling a new appointment, the system will automatically check for related past appointments.
-    If related appointments are found, inform the user about them as they might be relevant (follow-up work, recurring issues, etc.).
-    If the appointments are on the same day suggest combining them into a single visit.
-    
     IMPORTANT DATE HANDLING:
     - When users say "today", use: {datetime.now().strftime('%Y-%m-%d')}
     - When users say "tomorrow" or "tmrw", use: {(datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')}
@@ -570,11 +636,18 @@ def create_calendar_agent():
     - Always confirm full addresses when scheduling tasks that require travel.
     - An Address must contain a house number, street, city, zipcode, and state.
 
+    IMPORTANT SCHEDULING: When scheduling a new appointment, the system will automatically check for related past appointments.
+    If related appointments are found, inform the user about them as they might be relevant (follow-up work, recurring issues, etc.).
+    If the appointments are on the same day suggest combining them into a single visit.
     IMPORTANT SCHEDULING RULES:
     - Do not allow scheduling tasks in the past.
     - Do not allow scheduling overlapping tasks.
     - There must be anough travel time between the previous appointment and the new appointment, as well as between the new appointment and the next appointment.
+    - Appointments are only allowed to be scheduled between 08:00 and 18:00.
+    - No appointments can be scheduled on weekends (Saturday or Sunday).
     - If we fail any of these rules suggest alternative times based on existing calendar entries and their travel times.
+    - All appointments must be within 2 hours of Bozeman Montana (59715). If we fail this, inform the user we are out of range.
+
     """
 
     # Create agent with memory checkpointer

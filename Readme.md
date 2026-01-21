@@ -49,3 +49,5 @@ As i worked on this project certain things began to jump out at me that id like 
 ### Continued changes
 - Fixed passing in past message context when a user sends a message
 - Updated tools to return dictionaries which the LLM can understand better than strings
+- Cleaned up duplicate code, moving functions to their appropriate files
+- Validating distance from home base, time, and day of week for appointments
