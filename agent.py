@@ -51,10 +51,10 @@ def add_task(title: str, date: str, start_time: str, description: str, customer_
         title: Appointment title (required)
         date: Date in YYYY-MM-DD format (required)
         start_time: Time in HH:MM format (required)
-        description: Appointment notes/description (required)
+        description: Appointment notes/description (optional)
         customer_name: Customer full name (required)
         address: Full address (required)
-        estimated_end_time: Estimated end time in HH:MM format (optional, defaults to 1 hour after start)
+        estimated_end_time: Estimated end time in HH:MM format (optional, defaults to 1 hour after start).
     
     Returns:
         Dictionary with:
