@@ -154,7 +154,8 @@ def find_related_appointments(customer_name: str, title: str, description: str, 
         response = appointment_collection.query.near_text(
             query=search_query,
             limit=limit * 3,  # Get more results to filter by customer and distance
-            distance=distance_threshold  # Filter out loosely related matches
+            distance=distance_threshold,  # Filter out loosely related matches
+            return_metadata=["distance"]  # Explicitly request distance metadata
         )
         
         # Filter by customer, apply distance threshold, and format results
@@ -172,8 +173,8 @@ def find_related_appointments(customer_name: str, title: str, description: str, 
                         "description": obj.properties["description"],
                         "address": obj.properties["address"],
                         "start_time": obj.properties["start_time"],
-                        "distance": distance,  # Lower is more similar
-                        "similarity_score": (1 - distance) if distance is not None else None  # Convert to 0-1 score
+                        "distance": distance,  # 0-2 range, lower is more similar
+                        "similarity_score": (1 - (distance / 2)) if distance is not None else None  # Convert to 0-1 score
                     })
         
         # Sort by distance (most similar first) and return top results

@@ -51,8 +51,10 @@ As i worked on this project certain things began to jump out at me that id like 
 - Updated tools to return dictionaries which the LLM can understand better than strings
 - Cleaned up code structure
 - Validating distance from home base, time, and day of week for appointments
+- Cleaned up agent
 
 # TODO
 - vector better
 - delete all appointments still doesnt work? better understand what the llm can do
-- 2 agents and PII
+- PII
+- multi agent
