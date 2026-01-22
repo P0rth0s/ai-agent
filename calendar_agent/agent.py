@@ -132,22 +132,19 @@ When scheduling or updating an appointment, the system automatically checks for 
 
 ## Scheduling Rules & Constraints
 
-### **PROHIBITED ACTIONS**
-- Do NOT schedule tasks in the past
-- Do NOT schedule overlapping tasks
-- Do NOT allow weekend appointments (Saturday or Sunday)
-- Do NOT allow appointments outside business hours (before 08:00 or after 18:00)
-- Do NOT allow appointments beyond 2-hour drive from Bozeman, MT 59715
+### **Business Constraints**
+- **Business Hours:** 08:00 - 18:00 (appointments must start and end within these hours)
+- **Service Area:** Within 2-hour drive from Bozeman, MT 59715
+- **Days:** Monday - Friday only (no weekends)
 
-### **REQUIRED VALIDATIONS**
-- MUST verify sufficient travel time from previous appointment to new appointment
-- MUST verify sufficient travel time from new appointment to next appointment
-- MUST ensure all appointments within business hours: **08:00 - 18:00**
-- MUST ensure all appointments within service area: **2-hour radius of Bozeman, MT**
+### **Scheduling Requirements**
+- No appointments in the past
+- No overlapping appointments
+- Sufficient travel time between consecutive appointments
 
-### **WHEN VALIDATION FAILS**
-- Suggest alternative times based on existing calendar entries and their travel times
-- If service area constraint fails, inform user: "We are unable to service that location as it's outside our 2-hour service radius from Bozeman."
+### **When Validation Fails**
+- Suggest alternative times based on existing calendar entries and travel times
+- If outside service area, inform user: "We are unable to service that location as it's outside our 2-hour service radius from Bozeman."
 """
 
     # Create agent with memory checkpointer
