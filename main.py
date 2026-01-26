@@ -5,15 +5,15 @@ import time
 import logging
 
 # Import the agent creator and tools from agent.py
-from agent import create_calendar_agent
-from weaviate_db import close_weaviate_client, store_conversation, get_conversation_context
+from calendar_agent.agent import create_calendar_agent
+from calendar_agent.weaviate_db import close_weaviate_client, store_conversation, get_conversation_context
 import atexit
 
 # Load environment variables
 load_dotenv()
 
 # Configure logging
-logging.basicConfig(level=logging.WARNING, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Register cleanup function to close Weaviate connection on exit
@@ -73,13 +73,21 @@ def main():
                     logger.info(f"💬 User input: {user_input}")
                     
                     # Get relevant conversation context from vector DB
-                    context = get_conversation_context(user_input, max_conversations=3)
+                    context = get_conversation_context(user_input, max_conversations=10)
+                    
+                    # Build messages with context if available
+                    messages = []
                     if context:
                         logger.info(f"📚 Found relevant past conversations")
+                        # Add context as a system message
+                        # context_message = f"Relevant past conversations:\n{context}"
+                        # messages.append(("system", context_message))
+                    
+                    messages.append(("user", user_input))
                     
                     # Invoke agent with memory using thread_id
                     response = agent.invoke(
-                        {"messages": [("user", user_input)]},
+                        {"messages": messages},
                         config={"configurable": {"thread_id": thread_id}}
                     )
                     
